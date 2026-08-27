@@ -45,6 +45,23 @@ Item {
   // Up zooms out, Down zooms back in.
   property string viewMode: "carousel"
 
+  // Grid-view layout, shared by the grid loader and the key handler's
+  // spatial navigation: the column count that maximizes card size.
+  readonly property real gridGap: Style.space(18)
+  readonly property var gridFit: {
+    var availW = panel.width * 0.88
+    var availH = panel.height * 0.74
+    var best = { cols: 1, w: 0 }
+    for (var c = 1; c <= slotCount; c++) {
+      var r = Math.ceil(slotCount / c)
+      var w = Math.min((availW - gridGap * (c - 1)) / c,
+                       ((availH - gridGap * (r - 1)) / r) * monAspect)
+      if (w > best.w) best = { cols: c, w: w }
+    }
+    return best
+  }
+  readonly property int gridCols: Math.max(1, gridFit.cols)
+
   // Theme tokens. The picker layout reuses the image-picker surface so the
   // overview matches the theme switcher; the cards layout shares [menu].
   property color background: Color.menu.background
@@ -463,14 +480,29 @@ Item {
 
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
+        var grid = root.uiStyle === "picker" && root.viewMode === "grid"
+
         if (event.key === Qt.Key_Escape) {
-          root.dismiss()
+          // Step back one zoom level: grid → carousel → closed.
+          if (grid) root.viewMode = "carousel"
+          else root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_Up) {
-          if (root.uiStyle === "picker") root.viewMode = "grid"
+          if (grid) {
+            // Move up a row; bump at the top.
+            var up = root.selectedIndex - root.gridCols
+            if (up >= 0) root.selectedIndex = up
+          } else if (root.uiStyle === "picker") {
+            root.viewMode = "grid"
+          }
           event.accepted = true
         } else if (event.key === Qt.Key_Down) {
-          if (root.uiStyle === "picker") root.viewMode = "carousel"
+          if (grid) {
+            // Move down a row; past the bottom, fall back into the carousel.
+            var down = root.selectedIndex + root.gridCols
+            if (down < root.slotCount) root.selectedIndex = down
+            else root.viewMode = "carousel"
+          }
           event.accepted = true
         } else if (event.key === Qt.Key_Left
                    || (event.key === Qt.Key_Tab && event.modifiers & Qt.ShiftModifier)
@@ -559,29 +591,14 @@ Item {
       sourceComponent: Item {
         id: gridView
 
-        readonly property real gap: Style.space(18)
-        readonly property real availW: width * 0.88
-        readonly property real availH: height * 0.74
-
-        // Pick the column count that maximizes card size for the space.
-        readonly property var fit: {
-          var best = { cols: 1, w: 0 }
-          for (var c = 1; c <= root.slotCount; c++) {
-            var r = Math.ceil(root.slotCount / c)
-            var w = Math.min((availW - gap * (c - 1)) / c,
-                             ((availH - gap * (r - 1)) / r) * root.monAspect)
-            if (w > best.w) best = { cols: c, w: w }
-          }
-          return best
-        }
-        readonly property real cardW: fit.w
-        readonly property real cardH: fit.w / root.monAspect
+        readonly property real cardW: root.gridFit.w
+        readonly property real cardH: root.gridFit.w / root.monAspect
 
         Grid {
           anchors.centerIn: parent
-          columns: gridView.fit.cols
-          columnSpacing: gridView.gap
-          rowSpacing: gridView.gap
+          columns: root.gridCols
+          columnSpacing: root.gridGap
+          rowSpacing: root.gridGap
 
           Repeater {
             model: root.slotCount
