@@ -42,6 +42,14 @@ hl.gesture({
 })
 ```
 
+## Uninstall
+
+```bash
+omarchy plugin remove zzwong.stage
+```
+
+Then drop the keybind or gestures you added.
+
 ## Use
 
 | Input | Action |
