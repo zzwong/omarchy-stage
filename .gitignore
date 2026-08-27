@@ -2,3 +2,6 @@
 .DS_Store
 *.swp
 *~
+
+# User configuration — defaults live in Overview.qml
+settings.json
