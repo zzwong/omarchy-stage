@@ -639,13 +639,21 @@ Item {
         id: swipeNav
         enabled: root.uiStyle === "picker" && root.viewMode === "carousel"
         target: null
+        // Default orientation is Vertical, which drops horizontal events.
+        orientation: Qt.Horizontal
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         property real acc: 0
         onWheel: function(event) {
-          acc += event.angleDelta.x
+          // Inertia after a step would immediately re-trigger; swallow it.
+          if (swipeCooldown.running) return
+          // Touchpads on Wayland may report pixelDelta only (~60px ≈ one notch).
+          acc += event.angleDelta.x !== 0 ? event.angleDelta.x
+                                          : event.pixelDelta.x * 2
           swipeReset.restart()
-          while (Math.abs(acc) >= 120) {
+          if (Math.abs(acc) >= 120) {
             var dir = acc > 0 ? -1 : 1
-            acc += dir * 120
+            acc = 0
+            swipeCooldown.restart()
             root.kbdPriority = true
             if (root.paneIndex >= 0 && root.selectedPanes.length > 0)
               root.paneIndex = (root.paneIndex + dir + root.selectedPanes.length)
@@ -657,6 +665,7 @@ Item {
 
       // A stale partial swipe must not carry into the next one.
       Timer { id: swipeReset; interval: 400; onTriggered: swipeNav.acc = 0 }
+      Timer { id: swipeCooldown; interval: 140 }
     }
 
     // ------------------------------------------------------------------
