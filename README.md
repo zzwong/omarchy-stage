@@ -38,10 +38,12 @@ Or bind a key to `omarchy-shell shell toggle zzwong.overview`.
 | Input | Action |
 |---|---|
 | `←` `→` `Tab` `Shift-Tab` | move through workspaces |
+| `↑` / `↓` | zoom out to a grid of every workspace / back to the carousel |
 | `Enter` | jump to the selected workspace |
 | `1`–`9` | jump to that workspace directly |
 | click a slice | select it |
 | click the expanded preview | jump — window thumbnails are individually clickable |
+| the `+` slot at the end | create the next workspace |
 | `Esc` / click outside | close |
 
 Below the carousel, one pill per window. Windows with an MPRIS player
