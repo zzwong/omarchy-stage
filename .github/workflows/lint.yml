@@ -1,0 +1,30 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install qmllint and jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qt6-declarative-dev-tools jq
+
+      # The qs.* shell modules and Quickshell types only resolve inside
+      # omarchy-shell, so import-dependent categories are disabled; this
+      # gates on parse errors and every other warning category.
+      - name: qmllint Stage.qml
+        run: |
+          /usr/lib/qt6/bin/qmllint \
+            --import disable \
+            --unqualified disable \
+            --missing-property disable \
+            --uncreatable-type disable \
+            Stage.qml
+
+      - name: Validate JSON
+        run: jq -e . manifest.json settings.example.json > /dev/null
