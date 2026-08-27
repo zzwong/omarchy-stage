@@ -33,11 +33,12 @@ hl.gesture({
 })
 ```
 
-Or bind a key — `Super+Tab` is the usual overview spot, in
+Or bind a key — Omarchy already uses `Super+Tab` for workspace cycling, so
+`` Super+` `` (right above Tab) is a good spot, in
 `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + TAB", "Stage", "omarchy-shell shell toggle zzwong.stage")
+o.bind("SUPER + GRAVE", "Stage", "omarchy-shell shell toggle zzwong.stage")
 ```
 
 ## Use
