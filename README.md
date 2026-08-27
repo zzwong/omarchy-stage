@@ -4,7 +4,9 @@ Mission Control for Omarchy. Three-finger swipe up shows every workspace as a
 live preview in the theme-picker's slice carousel; swipe down, `Esc`, or a
 click outside closes it.
 
-![Overview](preview.png)
+![Stage carousel](preview-carousel.png)
+
+![Stage grid](preview-grid.png)
 
 The selected workspace expands to a large live preview — real window content
 via screencopy, including workspaces you can't see — with the others fanned
