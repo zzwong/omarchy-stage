@@ -632,6 +632,31 @@ Item {
           event.accepted = true
         }
       }
+
+      // Two-finger swipe (horizontal scroll) in the carousel walks the
+      // workspaces — or the panes when zoomed into them — matching ←/→.
+      WheelHandler {
+        id: swipeNav
+        enabled: root.uiStyle === "picker" && root.viewMode === "carousel"
+        target: null
+        property real acc: 0
+        onWheel: function(event) {
+          acc += event.angleDelta.x
+          swipeReset.restart()
+          while (Math.abs(acc) >= 120) {
+            var dir = acc > 0 ? -1 : 1
+            acc += dir * 120
+            root.kbdPriority = true
+            if (root.paneIndex >= 0 && root.selectedPanes.length > 0)
+              root.paneIndex = (root.paneIndex + dir + root.selectedPanes.length)
+                               % root.selectedPanes.length
+            else root.selectAdjacent(dir)
+          }
+        }
+      }
+
+      // A stale partial swipe must not carry into the next one.
+      Timer { id: swipeReset; interval: 400; onTriggered: swipeNav.acc = 0 }
     }
 
     // ------------------------------------------------------------------

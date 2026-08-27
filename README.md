@@ -55,6 +55,7 @@ Then drop the keybind or gestures you added.
 | Input | Action |
 |---|---|
 | `←` `→` `Tab` `Shift-Tab` | move through workspaces |
+| two-finger swipe ← → | same, in the carousel (walks panes when zoomed in) |
 | `↑` / `↓` | one zoom axis: grid ↕ carousel ↕ panes. In the grid, arrows move spatially and leaving the top or bottom edge falls back to the carousel; in the carousel, `↓` zooms into the workspace's windows — `←` `→` walk them, `Enter` focuses one, `↑` backs out |
 | `Enter` | jump to the selected workspace |
 | `1`–`9` | jump to that workspace directly |
