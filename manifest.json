@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "zzwong.overview",
+  "name": "Overview",
+  "version": "0.1.0",
+  "author": "zzwong",
+  "license": "MIT",
+  "description": "Mission Control-style workspace overview: zoomed-out live window previews, click to jump.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Overview.qml"
+  }
+}
