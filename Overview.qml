@@ -144,6 +144,32 @@ Item {
 
   property var workspaceList: []
 
+  // Pane mode: a third zoom level inside the carousel's expanded preview.
+  // -1 = off; otherwise an index into selectedPanes.
+  property int paneIndex: -1
+  onSelectedIndexChanged: paneIndex = -1
+  onViewModeChanged: paneIndex = -1
+
+  // Windows of the selected workspace in left-to-right, top-to-bottom order.
+  readonly property var selectedPanes: {
+    if (selectedIndex < 0 || selectedIndex >= workspaceList.length) return []
+    var vals = workspaceList[selectedIndex].toplevels.values
+    var arr = []
+    for (var i = 0; i < vals.length; i++) arr.push(vals[i])
+    arr.sort(function(a, b) {
+      var ia = a.lastIpcObject, ib = b.lastIpcObject
+      var ax = ia && ia.at ? ia.at[0] : 0, bx = ib && ib.at ? ib.at[0] : 0
+      if (ax !== bx) return ax - bx
+      var ay = ia && ia.at ? ia.at[1] : 0, by = ib && ib.at ? ib.at[1] : 0
+      return ay - by
+    })
+    return arr
+  }
+
+  readonly property string paneAddress:
+    (paneIndex >= 0 && paneIndex < selectedPanes.length)
+    ? String(selectedPanes[paneIndex].address) : ""
+
   // One slot per workspace plus the trailing "new workspace" slot.
   readonly property int slotCount: workspaceList.length + 1
   readonly property bool plusSelected: selectedIndex === workspaceList.length
@@ -243,6 +269,8 @@ Item {
     property bool chipAlways: false
     property bool hoverSelect: false
     property real dimOpacity: 0.42
+    // Address of the pane-mode highlighted window, "" when off.
+    property string highlightAddress: ""
 
     signal pressed()
     signal activated()
@@ -337,11 +365,23 @@ Item {
             width: Math.max(6, ww * wsContent.sx)
             height: Math.max(6, wh * wsContent.sy)
 
+            readonly property bool paneSelected: slab.highlightAddress !== ""
+                                                 && slab.highlightAddress === String(topl.address)
+            readonly property bool paneDimmed: slab.highlightAddress !== "" && !paneSelected
+
+            // Pane mode: the highlighted window lifts, siblings recede.
+            scale: paneSelected ? 1.03 : 1.0
+            z: paneSelected ? 5 : 0
+            opacity: paneDimmed ? 0.55 : 1.0
+            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+            Behavior on opacity { NumberAnimation { duration: 140 } }
+
             Rectangle {
               anchors.fill: parent
               color: Qt.darker(root.background, 1.15)
-              border.color: root.border
-              border.width: slab.selected ? 1 : 0
+              border.color: thumb.paneSelected ? root.pickerSelectedBorder : root.border
+              border.width: thumb.paneSelected ? 2 : (slab.selected ? 1 : 0)
+              Behavior on border.color { ColorAnimation { duration: 140 } }
               clip: true
 
               ScreencopyView {
@@ -484,12 +524,16 @@ Item {
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
+        var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
+        var panes = caro && root.paneIndex >= 0
 
         if (event.key === Qt.Key_Escape) {
           root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_Up) {
-          if (grid) {
+          if (panes) {
+            root.paneIndex = -1
+          } else if (grid) {
             // Move up a row; past the top, fall back into the carousel.
             var up = root.selectedIndex - root.gridCols
             if (up >= 0) root.selectedIndex = up
@@ -504,18 +548,25 @@ Item {
             var down = root.selectedIndex + root.gridCols
             if (down < root.slotCount) root.selectedIndex = down
             else root.viewMode = "carousel"
+          } else if (caro && root.paneIndex < 0 && root.selectedPanes.length > 0) {
+            // Zoom one more level: into the panes of the expanded preview.
+            root.paneIndex = 0
           }
           event.accepted = true
         } else if (event.key === Qt.Key_Left
                    || (event.key === Qt.Key_Tab && event.modifiers & Qt.ShiftModifier)
                    || event.key === Qt.Key_Backtab) {
-          root.selectAdjacent(-1)
+          if (panes) root.paneIndex = (root.paneIndex - 1 + root.selectedPanes.length)
+                                      % root.selectedPanes.length
+          else root.selectAdjacent(-1)
           event.accepted = true
         } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Tab) {
-          root.selectAdjacent(1)
+          if (panes) root.paneIndex = (root.paneIndex + 1) % root.selectedPanes.length
+          else root.selectAdjacent(1)
           event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          root.activateSelected()
+          if (panes) root.focusWindow(root.paneAddress)
+          else root.activateSelected()
           event.accepted = true
         } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
           root.focusWorkspace(event.key - Qt.Key_0)
@@ -559,6 +610,7 @@ Item {
             workspace: index < root.workspaceList.length ? root.workspaceList[index] : null
             selected: index === root.selectedIndex
             skew: pickerCard.expandedH * root.skewSlope
+            highlightAddress: selected ? root.paneAddress : ""
 
             x: selected ? pickerCard.previewX
                         : (relativeIndex < 0
@@ -687,6 +739,8 @@ Item {
           required property var modelData
 
           readonly property var topl: modelData
+          readonly property bool paneSelected: root.paneAddress !== ""
+                                               && root.paneAddress === String(topl.address)
           readonly property var player: root.playerForWindow(topl)
           readonly property bool hasTrack: player !== null
                                            && !!(player.trackTitle || player.trackArtist)
@@ -708,13 +762,15 @@ Item {
           width: content.implicitWidth + Style.space(20)
           height: Style.space(30)
           radius: height / 2
-          color: Util.alpha(root.pickerText, pillMouse.containsMouse ? 0.16 : 0.08)
-          border.color: pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
-                                     : Util.alpha(root.pickerText, 0.18)
+          color: Util.alpha(root.pickerText,
+                            (pillMouse.containsMouse || pill.paneSelected) ? 0.16 : 0.08)
+          border.color: pill.paneSelected ? root.pickerSelectedBorder
+                        : pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
+                                       : Util.alpha(root.pickerText, 0.18)
           border.width: 1
           Behavior on border.color { ColorAnimation { duration: 170 } }
 
-          // Soft accent glow ring while playing.
+          // Soft accent glow ring while playing or pane-highlighted.
           Rectangle {
             anchors.fill: parent
             anchors.margins: -3
@@ -722,7 +778,7 @@ Item {
             color: "transparent"
             border.color: Util.alpha(root.pickerSelectedBorder, 0.3)
             border.width: 2
-            opacity: pill.playing ? 1 : 0
+            opacity: (pill.playing || pill.paneSelected) ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 170 } }
           }
 
