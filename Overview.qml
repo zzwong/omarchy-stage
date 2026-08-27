@@ -715,9 +715,9 @@ Item {
       anchors.horizontalCenter: parent.horizontalCenter
       spacing: Style.space(8)
 
-      readonly property var selectedToplevels:
-        (root.selectedIndex >= 0 && root.selectedIndex < root.workspaceList.length)
-        ? root.workspaceList[root.selectedIndex].toplevels.values : []
+      // Same spatial (left-to-right) order as pane navigation and the
+      // thumbnails themselves.
+      readonly property var selectedToplevels: root.selectedPanes
 
       Rectangle {
         visible: root.plusSelected
