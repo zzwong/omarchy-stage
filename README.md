@@ -52,7 +52,8 @@ Every pill is click-to-focus.
 
 ## Settings
 
-`settings.json` in the plugin folder, hot-reloaded on save:
+Optional. Defaults are built in; to override, copy `settings.example.json`
+to `settings.json` in the plugin folder (gitignored, hot-reloaded on save):
 
 | Key | Values | Meaning |
 |---|---|---|
