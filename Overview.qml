@@ -142,6 +142,18 @@ Item {
     return false
   }
 
+  // Current omarchy wallpaper, resolved through the state symlink on each
+  // open so theme/background switches are picked up.
+  property string wallpaperPath: ""
+  Process {
+    id: wallpaperProbe
+    command: ["readlink", "-f",
+              Quickshell.env("HOME") + "/.local/state/omarchy/current/background"]
+    stdout: StdioCollector {
+      onStreamFinished: root.wallpaperPath = String(text).trim()
+    }
+  }
+
   property var workspaceList: []
 
   // Pane mode: a third zoom level inside the carousel's expanded preview.
@@ -203,6 +215,7 @@ Item {
   function open(payloadJson) {
     Hyprland.refreshWorkspaces()
     Hyprland.refreshToplevels() // fresh geometry in lastIpcObject
+    wallpaperProbe.running = true
     root.rebuildWorkspaces()
     root.viewMode = "carousel"
     root.opened = true
@@ -334,6 +347,16 @@ Item {
         Rectangle {
           anchors.fill: parent
           color: root.background
+        }
+
+        // The wallpaper is the truthful base layer: what sits behind the
+        // windows, and all a fresh workspace shows.
+        Image {
+          anchors.fill: parent
+          source: root.wallpaperPath ? "file://" + root.wallpaperPath : ""
+          fillMode: Image.PreserveAspectCrop
+          asynchronous: true
+          smooth: true
         }
 
         // Clicking empty selected space activates (jump / create).
