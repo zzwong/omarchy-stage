@@ -1,8 +1,8 @@
 # Stage
 
-Mission Control for Omarchy. Three-finger swipe up shows every workspace as a
-live preview in the theme-picker's slice carousel; swipe down, `Esc`, or a
-click outside closes it.
+Mission Control for Omarchy. One keypress (or a three-finger swipe) shows
+every workspace as a live preview in the theme-picker's slice carousel;
+`Esc`, a click outside, or a swipe down closes it.
 
 ![Stage carousel](preview-carousel.png)
 
@@ -18,7 +18,16 @@ out as skewed slices, same shape language as `omarchy theme set`.
 omarchy plugin add https://github.com/zzwong/omarchy-stage --enable
 ```
 
-Gestures are user config in Omarchy, so add to `~/.config/hypr/input.lua`:
+Then bind a key — Omarchy already uses `Super+Tab` for workspace cycling, so
+`` Super+` `` (right above Tab) is a good spot, in
+`~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + GRAVE", "Stage", "omarchy-shell shell toggle zzwong.stage")
+```
+
+On a touchpad, three-finger swipes feel great too (gestures are user config
+in Omarchy) — add to `~/.config/hypr/input.lua`:
 
 ```lua
 hl.gesture({
@@ -31,14 +40,6 @@ hl.gesture({
   direction = "down",
   action = function() hl.exec_cmd("omarchy-shell shell hide zzwong.stage") end,
 })
-```
-
-Or bind a key — Omarchy already uses `Super+Tab` for workspace cycling, so
-`` Super+` `` (right above Tab) is a good spot, in
-`~/.config/hypr/bindings.lua`:
-
-```lua
-o.bind("SUPER + GRAVE", "Stage", "omarchy-shell shell toggle zzwong.stage")
 ```
 
 ## Use
