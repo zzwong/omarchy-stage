@@ -486,15 +486,14 @@ Item {
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
 
         if (event.key === Qt.Key_Escape) {
-          // Step back one zoom level: grid → carousel → closed.
-          if (grid) root.viewMode = "carousel"
-          else root.dismiss()
+          root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_Up) {
           if (grid) {
-            // Move up a row; bump at the top.
+            // Move up a row; past the top, fall back into the carousel.
             var up = root.selectedIndex - root.gridCols
             if (up >= 0) root.selectedIndex = up
+            else root.viewMode = "carousel"
           } else if (root.uiStyle === "picker") {
             root.viewMode = "grid"
           }
