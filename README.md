@@ -59,7 +59,7 @@ cp ~/.config/omarchy/plugins/zzwong.overview/settings.example.json \
    ~/.config/omarchy/plugins/zzwong.overview/settings.json
 ```
 
-`settings.json` is gitignored and hot-reloads on save:
+`settings.json` hot-reloads on save:
 
 | Key | Values | Meaning |
 |---|---|---|
