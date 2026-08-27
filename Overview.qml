@@ -436,13 +436,16 @@ Item {
       }
     }
 
-    // Unselected slab: click (or hover, in grid mode) selects it.
+    // Unselected slab: click (or hover, in grid mode) selects it. Hover
+    // selection keys off real mouse motion, not onEntered — the area
+    // re-enables under an idle cursor whenever the keyboard moves selection
+    // away, and an onEntered there would snap selection straight back.
     MouseArea {
       anchors.fill: parent
       enabled: !slab.selected
       hoverEnabled: slab.hoverSelect
       cursorShape: Qt.PointingHandCursor
-      onEntered: if (slab.hoverSelect) slab.pressed()
+      onPositionChanged: if (slab.hoverSelect) slab.pressed()
       onClicked: slab.pressed()
     }
   }
@@ -926,7 +929,7 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                onEntered: root.selectedIndex = slot.index
+                onPositionChanged: root.selectedIndex = slot.index
                 onClicked: root.focusWorkspace(slot.workspace.id)
               }
 
