@@ -33,7 +33,12 @@ hl.gesture({
 })
 ```
 
-Or bind a key to `omarchy-shell shell toggle zzwong.stage`.
+Or bind a key — `Super+Tab` is the usual overview spot, in
+`~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + TAB", "Stage", "omarchy-shell shell toggle zzwong.stage")
+```
 
 ## Use
 
