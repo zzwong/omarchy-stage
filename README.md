@@ -79,7 +79,7 @@ cp ~/.config/omarchy/plugins/zzwong.stage/settings.example.json \
    ~/.config/omarchy/plugins/zzwong.stage/settings.json
 ```
 
-`settings.json` hot-reloads on save:
+`settings.json` is re-read each time Stage opens:
 
 | Key | Values | Meaning |
 |---|---|---|

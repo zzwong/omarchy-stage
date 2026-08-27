@@ -17,7 +17,8 @@ Item {
   property var shell: null
   property var manifest: null
 
-  // Feature flags, set in settings.json next to this file (hot-reloads):
+  // Feature flags, set in settings.json next to this file (re-read on each
+  // open of the overlay):
   //   style: "picker" — omarchy theme-picker pattern: skewed slice carousel,
   //                     selected workspace expands to a large live preview.
   //          "cards"  — flat row of equal workspace cards.
@@ -31,17 +32,27 @@ Item {
   property string badgeStyle: "badge"
   property string viewPref: "auto"
 
-  FileView {
-    path: Quickshell.env("HOME") + "/.config/omarchy/plugins/zzwong.stage/settings.json"
-    onLoaded: {
-      try {
-        var s = JSON.parse(text())
-        if (s.style === "picker" || s.style === "cards") root.uiStyle = s.style
-        if (s.badgeStyle === "badge" || s.badgeStyle === "omarchy")
-          root.badgeStyle = s.badgeStyle
-        if (s.view === "auto" || s.view === "carousel" || s.view === "grid")
-          root.viewPref = s.view
-      } catch (e) {}
+  // Settings live in a user-replaceable path, so they are never opened in
+  // this process: a child rejects symlinks and non-regular files (a FIFO
+  // would block the reader), caps the read at 64 KiB, and is time-bounded
+  // against open()-to-read races. Re-run on each overlay open.
+  Process {
+    id: settingsProbe
+    running: true
+    command: ["sh", "-c",
+      'f="$HOME/.config/omarchy/plugins/zzwong.stage/settings.json"; ' +
+      '[ -f "$f" ] && [ ! -L "$f" ] && exec timeout 2 head -c 65536 -- "$f"']
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var s = JSON.parse(String(text))
+          if (s.style === "picker" || s.style === "cards") root.uiStyle = s.style
+          if (s.badgeStyle === "badge" || s.badgeStyle === "omarchy")
+            root.badgeStyle = s.badgeStyle
+          if (s.view === "auto" || s.view === "carousel" || s.view === "grid")
+            root.viewPref = s.view
+        } catch (e) {}
+      }
     }
   }
 
@@ -227,6 +238,7 @@ Item {
     Hyprland.refreshWorkspaces()
     Hyprland.refreshToplevels() // fresh geometry in lastIpcObject
     wallpaperProbe.running = true
+    settingsProbe.running = true
     root.kbdPriority = false
     root.rebuildWorkspaces()
     root.viewMode = root.viewPref === "grid" ? "grid" : "carousel"
