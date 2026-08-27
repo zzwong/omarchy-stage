@@ -23,8 +23,13 @@ Item {
   //          "cards"  — flat row of equal workspace cards.
   //   badgeStyle ("cards" style only): "badge" rounded square | "omarchy"
   //                     bar-style numeral/glyph.
+  //   view: "auto" — open in the carousel, Up/Down zoom between it and the
+  //                  grid (default).
+  //         "carousel" | "grid" — lock to a single view; the zoom keys and
+  //                  edge fall-throughs to the other view are disabled.
   property string uiStyle: "picker"
   property string badgeStyle: "badge"
+  property string viewPref: "auto"
 
   FileView {
     path: Quickshell.env("HOME") + "/.config/omarchy/plugins/zzwong.stage/settings.json"
@@ -34,6 +39,8 @@ Item {
         if (s.style === "picker" || s.style === "cards") root.uiStyle = s.style
         if (s.badgeStyle === "badge" || s.badgeStyle === "omarchy")
           root.badgeStyle = s.badgeStyle
+        if (s.view === "auto" || s.view === "carousel" || s.view === "grid")
+          root.viewPref = s.view
       } catch (e) {}
     }
   }
@@ -222,7 +229,7 @@ Item {
     wallpaperProbe.running = true
     root.kbdPriority = false
     root.rebuildWorkspaces()
-    root.viewMode = "carousel"
+    root.viewMode = root.viewPref === "grid" ? "grid" : "carousel"
     root.opened = true
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -581,21 +588,23 @@ Item {
           if (panes) {
             root.paneIndex = -1
           } else if (grid) {
-            // Move up a row; past the top, fall back into the carousel.
+            // Move up a row; past the top, fall back into the carousel
+            // (unless locked to the grid).
             var up = root.selectedIndex - root.gridCols
             if (up >= 0) root.selectedIndex = up
-            else root.viewMode = "carousel"
-          } else if (root.uiStyle === "picker") {
+            else if (root.viewPref === "auto") root.viewMode = "carousel"
+          } else if (root.uiStyle === "picker" && root.viewPref === "auto") {
             root.viewMode = "grid"
           }
           event.accepted = true
         } else if (event.key === Qt.Key_Down) {
           root.kbdPriority = true
           if (grid) {
-            // Move down a row; past the bottom, fall back into the carousel.
+            // Move down a row; past the bottom, fall back into the carousel
+            // (unless locked to the grid).
             var down = root.selectedIndex + root.gridCols
             if (down < root.slotCount) root.selectedIndex = down
-            else root.viewMode = "carousel"
+            else if (root.viewPref === "auto") root.viewMode = "carousel"
           } else if (caro && root.paneIndex < 0 && root.selectedPanes.length > 0) {
             // Zoom one more level: into the panes of the expanded preview.
             root.paneIndex = 0

@@ -1,4 +1,5 @@
 {
   "style": "picker",
+  "view": "auto",
   "badgeStyle": "badge"
 }

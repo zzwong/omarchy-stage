@@ -68,6 +68,7 @@ cp ~/.config/omarchy/plugins/zzwong.stage/settings.example.json \
 | Key | Values | Meaning |
 |---|---|---|
 | `style` | `"picker"` (default), `"cards"` | slice carousel, or a flat row of equal cards |
+| `view` | `"auto"` (default), `"carousel"`, `"grid"` | `auto` opens in the carousel with `↑`/`↓` zooming between views; the others lock Stage to a single view |
 | `badgeStyle` | `"badge"` (default), `"omarchy"` | cards style only: rounded-square badge, or the bar's bare numeral/glyph |
 
 ## Notes
