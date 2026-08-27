@@ -41,6 +41,10 @@ Item {
   property bool opened: false
   property int selectedIndex: -1
 
+  // After a navigation keypress the keyboard owns selection; hover only
+  // re-takes it once the mouse moves deliberately (see WsSlab).
+  property bool kbdPriority: false
+
   // "carousel" is the zoomed-in slice view; "grid" lays every workspace out.
   // Up zooms out, Down zooms back in.
   property string viewMode: "carousel"
@@ -216,6 +220,7 @@ Item {
     Hyprland.refreshWorkspaces()
     Hyprland.refreshToplevels() // fresh geometry in lastIpcObject
     wallpaperProbe.running = true
+    root.kbdPriority = false
     root.rebuildWorkspaces()
     root.viewMode = "carousel"
     root.opened = true
@@ -503,13 +508,31 @@ Item {
     // selection keys off real mouse motion, not onEntered — the area
     // re-enables under an idle cursor whenever the keyboard moves selection
     // away, and an onEntered there would snap selection straight back.
+    // While the keyboard has priority, hover must travel a deliberate
+    // distance before it re-takes selection.
     MouseArea {
+      id: slabMouse
       anchors.fill: parent
       enabled: !slab.selected
       hoverEnabled: slab.hoverSelect
       cursorShape: Qt.PointingHandCursor
-      onPositionChanged: if (slab.hoverSelect) slab.pressed()
-      onClicked: slab.pressed()
+
+      property real refX: -1
+      property real refY: -1
+      readonly property bool kp: root.kbdPriority
+      onKpChanged: { refX = -1; refY = -1 }
+      onExited: { refX = -1; refY = -1 }
+
+      onPositionChanged: function(mouse) {
+        if (!slab.hoverSelect) return
+        if (!root.kbdPriority) { slab.pressed(); return }
+        if (refX < 0) { refX = mouse.x; refY = mouse.y; return }
+        if (Math.abs(mouse.x - refX) + Math.abs(mouse.y - refY) > 24) {
+          root.kbdPriority = false
+          slab.pressed()
+        }
+      }
+      onClicked: { root.kbdPriority = false; slab.pressed() }
     }
   }
 
@@ -554,6 +577,7 @@ Item {
           root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_Up) {
+          root.kbdPriority = true
           if (panes) {
             root.paneIndex = -1
           } else if (grid) {
@@ -566,6 +590,7 @@ Item {
           }
           event.accepted = true
         } else if (event.key === Qt.Key_Down) {
+          root.kbdPriority = true
           if (grid) {
             // Move down a row; past the bottom, fall back into the carousel.
             var down = root.selectedIndex + root.gridCols
@@ -579,11 +604,13 @@ Item {
         } else if (event.key === Qt.Key_Left
                    || (event.key === Qt.Key_Tab && event.modifiers & Qt.ShiftModifier)
                    || event.key === Qt.Key_Backtab) {
+          root.kbdPriority = true
           if (panes) root.paneIndex = (root.paneIndex - 1 + root.selectedPanes.length)
                                       % root.selectedPanes.length
           else root.selectAdjacent(-1)
           event.accepted = true
         } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Tab) {
+          root.kbdPriority = true
           if (panes) root.paneIndex = (root.paneIndex + 1) % root.selectedPanes.length
           else root.selectAdjacent(1)
           event.accepted = true
@@ -1007,7 +1034,7 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                onPositionChanged: root.selectedIndex = slot.index
+                onPositionChanged: if (!root.kbdPriority) root.selectedIndex = slot.index
                 onClicked: root.focusWorkspace(slot.workspace.id)
               }
 
