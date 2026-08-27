@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "zzwong.overview",
-  "name": "Overview",
+  "id": "zzwong.stage",
+  "name": "Stage",
   "version": "0.1.0",
   "author": "zzwong",
   "license": "MIT",
@@ -9,6 +9,6 @@
   "kinds": ["overlay"],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "Overview.qml"
+    "overlay": "Stage.qml"
   }
 }

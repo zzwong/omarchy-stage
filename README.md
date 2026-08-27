@@ -1,4 +1,4 @@
-# Overview
+# Stage
 
 Mission Control for Omarchy. Three-finger swipe up shows every workspace as a
 live preview in the theme-picker's slice carousel; swipe down, `Esc`, or a
@@ -13,7 +13,7 @@ out as skewed slices, same shape language as `omarchy theme set`.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/zzwong/omarchy-overview --enable
+omarchy plugin add https://github.com/zzwong/omarchy-stage --enable
 ```
 
 Gestures are user config in Omarchy, so add to `~/.config/hypr/input.lua`:
@@ -22,16 +22,16 @@ Gestures are user config in Omarchy, so add to `~/.config/hypr/input.lua`:
 hl.gesture({
   fingers = 3,
   direction = "up",
-  action = function() hl.exec_cmd("omarchy-shell shell toggle zzwong.overview") end,
+  action = function() hl.exec_cmd("omarchy-shell shell toggle zzwong.stage") end,
 })
 hl.gesture({
   fingers = 3,
   direction = "down",
-  action = function() hl.exec_cmd("omarchy-shell shell hide zzwong.overview") end,
+  action = function() hl.exec_cmd("omarchy-shell shell hide zzwong.stage") end,
 })
 ```
 
-Or bind a key to `omarchy-shell shell toggle zzwong.overview`.
+Or bind a key to `omarchy-shell shell toggle zzwong.stage`.
 
 ## Use
 
@@ -57,8 +57,8 @@ Every pill is click-to-focus.
 Optional. Defaults are built in; to override:
 
 ```bash
-cp ~/.config/omarchy/plugins/zzwong.overview/settings.example.json \
-   ~/.config/omarchy/plugins/zzwong.overview/settings.json
+cp ~/.config/omarchy/plugins/zzwong.stage/settings.example.json \
+   ~/.config/omarchy/plugins/zzwong.stage/settings.json
 ```
 
 `settings.json` hot-reloads on save:

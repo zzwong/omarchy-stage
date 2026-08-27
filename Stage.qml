@@ -27,7 +27,7 @@ Item {
   property string badgeStyle: "badge"
 
   FileView {
-    path: Quickshell.env("HOME") + "/.config/omarchy/plugins/zzwong.overview/settings.json"
+    path: Quickshell.env("HOME") + "/.config/omarchy/plugins/zzwong.stage/settings.json"
     onLoaded: {
       try {
         var s = JSON.parse(text())
@@ -234,7 +234,7 @@ Item {
   function dismiss() {
     root.opened = false
     if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "zzwong.overview")
+      root.shell.hide((root.manifest && root.manifest.id) || "zzwong.stage")
   }
 
   function toggle() {
@@ -541,7 +541,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "zzwong-overview"
+    WlrLayershell.namespace: "zzwong-stage"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
