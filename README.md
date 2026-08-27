@@ -52,8 +52,14 @@ Every pill is click-to-focus.
 
 ## Settings
 
-Optional. Defaults are built in; to override, copy `settings.example.json`
-to `settings.json` in the plugin folder (gitignored, hot-reloaded on save):
+Optional. Defaults are built in; to override:
+
+```bash
+cp ~/.config/omarchy/plugins/zzwong.overview/settings.example.json \
+   ~/.config/omarchy/plugins/zzwong.overview/settings.json
+```
+
+`settings.json` is gitignored and hot-reloads on save:
 
 | Key | Values | Meaning |
 |---|---|---|
