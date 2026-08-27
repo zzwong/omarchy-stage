@@ -38,7 +38,7 @@ Or bind a key to `omarchy-shell shell toggle zzwong.overview`.
 | Input | Action |
 |---|---|
 | `←` `→` `Tab` `Shift-Tab` | move through workspaces |
-| `↑` / `↓` | zoom out to a grid of every workspace / back to the carousel; in the grid, arrows move spatially and leaving the top or bottom edge falls back to the carousel |
+| `↑` / `↓` | one zoom axis: grid ↕ carousel ↕ panes. In the grid, arrows move spatially and leaving the top or bottom edge falls back to the carousel; in the carousel, `↓` zooms into the workspace's windows — `←` `→` walk them, `Enter` focuses one, `↑` backs out |
 | `Enter` | jump to the selected workspace |
 | `1`–`9` | jump to that workspace directly |
 | click a slice | select it |
