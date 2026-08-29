@@ -90,6 +90,50 @@ cp ~/.config/omarchy/plugins/zzwong.stage/settings.example.json \
 | `style` | `"picker"` (default), `"cards"` | slice carousel, or a flat row of equal cards |
 | `view` | `"auto"` (default), `"carousel"`, `"grid"` | `auto` opens in the carousel with `↑`/`↓` zooming between views; the others lock Stage to a single view |
 | `badgeStyle` | `"badge"` (default), `"omarchy"` | cards style only: rounded-square badge, or the bar's bare numeral/glyph |
+| `keybindMode` | `"toggle"` (default), `"cycle"` | `cycle` makes releasing the modifier jump to the selection — see below |
+
+### Stepping keys
+
+A summon carrying a `step` moves the selection when Stage is already open,
+and opens Stage when it isn't. Bind one per direction, in
+`~/.config/hypr/bindings.lua`:
+
+```lua
+hl.unbind("SUPER + TAB")
+hl.unbind("SUPER + SHIFT + TAB")
+o.bind("SUPER + TAB", "Stage",
+  "omarchy-shell shell summon zzwong.stage '{\"step\":1}'")
+o.bind("SUPER + SHIFT + TAB", "Stage back",
+  "omarchy-shell shell summon zzwong.stage '{\"step\":-1}'")
+```
+
+Any chord works; the example unbinds Omarchy's stock `Super+Tab` workspace
+cycling only because Stage supersedes it. Stepping works in either
+`keybindMode` — on its own it's just another way to move the selection while
+Stage is open.
+
+### Hold-to-cycle
+
+Add `"keybindMode": "cycle"` to `settings.json` and those stepping keys
+become alt-tab: keep `Super` held, tap to walk the workspaces, release
+`Super` to jump to the selected one. Opening Stage without stepping commits
+nothing, so a plain tap still just opens it and `←` `→` `Enter` `Esc` behave
+as always.
+
+Hold-to-cycle watches for `Super` specifically, so pick a `Super` chord for
+your stepping keys — a step carries no modifier of its own, and committing on
+any modifier release would jump on one you never cycled with. Leave the hold
+idle for ten seconds and the jump disarms; `Enter` still commits.
+
+Stepping is the only navigation available while `Super` is down: Hyprland
+keeps its own `Super` chords, so `Super`+arrows stay window focus and never
+reach Stage. Release without stepping to browse with the arrows instead.
+
+When Stage is zoomed into a workspace's windows (`↓`), stepping walks those
+windows instead, and releasing `Super` focuses the selected one.
+
+Only a step arms the jump, so `hide` always means hide — the swipe-down
+gesture and `Esc` close Stage no matter what is held.
 
 ## Notes
 

@@ -1,5 +1,6 @@
 {
   "style": "picker",
   "view": "auto",
-  "badgeStyle": "badge"
+  "badgeStyle": "badge",
+  "keybindMode": "toggle"
 }
