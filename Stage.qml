@@ -29,9 +29,14 @@ Item {
   //                  grid (default).
   //         "carousel" | "grid" — lock to a single view; the zoom keys and
   //                  edge fall-throughs to the other view are disabled.
+  //   keybindMode: "toggle" — the bound key opens, a second press closes
+  //                  (default). "cycle" — releasing the modifier after a
+  //                  step jumps to the selection; see the README for the
+  //                  stepping keys that go with it.
   property string uiStyle: "picker"
   property string badgeStyle: "badge"
   property string viewPref: "auto"
+  property string keybindMode: "toggle"
 
   // Settings live in a user-replaceable path, so they are never opened in
   // this process: a child rejects symlinks and non-regular files (a FIFO
@@ -52,6 +57,8 @@ Item {
             root.badgeStyle = s.badgeStyle
           if (s.view === "auto" || s.view === "carousel" || s.view === "grid")
             root.viewPref = s.view
+          if (s.keybindMode === "toggle" || s.keybindMode === "cycle")
+            root.keybindMode = s.keybindMode
         } catch (e) {}
       }
     }
@@ -235,12 +242,48 @@ Item {
     }
   }
 
+  // --- Hold-to-cycle ("cycle" keybindMode) -----------------------------
+  // The compositor eats the bound chord, so a step only reaches us as a
+  // summon carrying one. Nothing here guesses at the modifier: only a
+  // stepped overlay commits on release, which keeps hide() meaning hide.
+  property bool cycled: false
+
+  // Disarm if the release never lands — a gesture opened the overlay, or the
+  // grab missed it. Restarted per step and keypress: only idle holds expire.
+  Timer {
+    id: holdWatchdog
+    interval: 10000
+    onTriggered: root.cycled = false
+  }
+
+  function cycleStep(delta) {
+    root.cycled = true
+    root.kbdPriority = true
+    root.advance(delta)
+    holdWatchdog.restart()
+  }
+
   function open(payloadJson) {
+    var payload = ({})
+    try { payload = JSON.parse(payloadJson || "{}") || ({}) } catch (e) {}
+
+    // A step while already open is the second keybind asking for
+    // previous/next, not a fresh open.
+    if (root.opened && payload.step) {
+      root.cycleStep(payload.step < 0 ? -1 : 1)
+      return
+    }
+
     Hyprland.refreshWorkspaces()
     Hyprland.refreshToplevels() // fresh geometry in lastIpcObject
     wallpaperProbe.running = true
     settingsProbe.running = true
     root.kbdPriority = false
+    root.cycled = false
+    holdWatchdog.stop()
+    // Reopening on the same workspace changes neither viewMode nor
+    // selectedIndex, so nothing else clears a stale pane zoom.
+    root.paneIndex = -1
     root.rebuildWorkspaces()
     root.viewMode = root.viewPref === "grid" ? "grid" : "carousel"
     root.opened = true
@@ -249,6 +292,8 @@ Item {
 
   function close() {
     root.opened = false
+    root.cycled = false
+    holdWatchdog.stop()
   }
 
   function dismiss() {
@@ -294,6 +339,20 @@ Item {
       root.focusWorkspace(root.workspaceList[root.selectedIndex].id)
     else
       root.createWorkspace()
+  }
+
+  // One ←/→ step: panes when zoomed into them, else workspaces.
+  function advance(delta) {
+    if (root.paneIndex >= 0 && root.selectedPanes.length > 0)
+      root.paneIndex = (root.paneIndex + delta + root.selectedPanes.length)
+                       % root.selectedPanes.length
+    else root.selectAdjacent(delta)
+  }
+
+  // Enter, and what releasing the modifier does in "cycle" mode.
+  function activateCurrent() {
+    if (root.paneIndex >= 0) root.focusWindow(root.paneAddress)
+    else root.activateSelected()
   }
 
   // Skewed workspace slab: the one visual unit shared by the carousel, the
@@ -588,7 +647,30 @@ Item {
       focus: true
 
       Keys.priority: Keys.BeforeItem
+
       Keys.onPressed: function(event) {
+        // Any key that reaches us mid-hold is not an idle hold. Few do —
+        // the compositor keeps its own Super chords — so the interval
+        // above carries most of the weight.
+        if (root.cycled) holdWatchdog.restart()
+        keyCatcher.navigate(event)
+      }
+
+      // Only the modifier's release is ever delivered — its press precedes
+      // the grab — as Key_Meta or Key_Super_L. Super only: a step carries no
+      // modifier state, so any other would commit on one never cycled with.
+      Keys.onReleased: function(event) {
+        if (event.isAutoRepeat) return
+        if (root.keybindMode !== "cycle" || !root.cycled) return
+        if (event.key !== Qt.Key_Meta && event.key !== Qt.Key_Super_L
+            && event.key !== Qt.Key_Super_R) return
+        root.cycled = false
+        holdWatchdog.stop()
+        root.activateCurrent()
+        event.accepted = true
+      }
+
+      function navigate(event) {
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
@@ -627,18 +709,14 @@ Item {
                    || (event.key === Qt.Key_Tab && event.modifiers & Qt.ShiftModifier)
                    || event.key === Qt.Key_Backtab) {
           root.kbdPriority = true
-          if (panes) root.paneIndex = (root.paneIndex - 1 + root.selectedPanes.length)
-                                      % root.selectedPanes.length
-          else root.selectAdjacent(-1)
+          root.advance(-1)
           event.accepted = true
         } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Tab) {
           root.kbdPriority = true
-          if (panes) root.paneIndex = (root.paneIndex + 1) % root.selectedPanes.length
-          else root.selectAdjacent(1)
+          root.advance(1)
           event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          if (panes) root.focusWindow(root.paneAddress)
-          else root.activateSelected()
+          root.activateCurrent()
           event.accepted = true
         } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
           root.focusWorkspace(event.key - Qt.Key_0)
@@ -668,10 +746,7 @@ Item {
             acc = 0
             swipeCooldown.restart()
             root.kbdPriority = true
-            if (root.paneIndex >= 0 && root.selectedPanes.length > 0)
-              root.paneIndex = (root.paneIndex + dir + root.selectedPanes.length)
-                               % root.selectedPanes.length
-            else root.selectAdjacent(dir)
+            root.advance(dir)
           }
         }
       }
