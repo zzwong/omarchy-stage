@@ -1036,6 +1036,7 @@ Item {
                 id: measureText
                 visible: false
                 text: pill.label
+                textFormat: Text.PlainText
                 font.family: Style.font.menuFamily
                 font.pixelSize: Style.font.subtitle
               }
@@ -1044,6 +1045,7 @@ Item {
                 visible: !labelClip.marquee
                 width: labelClip.width
                 text: pill.label
+                textFormat: Text.PlainText
                 color: root.pickerText
                 font.family: Style.font.menuFamily
                 font.pixelSize: Style.font.subtitle
@@ -1057,12 +1059,14 @@ Item {
 
                 Text {
                   text: pill.label
+                  textFormat: Text.PlainText
                   color: root.pickerText
                   font.family: Style.font.menuFamily
                   font.pixelSize: Style.font.subtitle
                 }
                 Text {
                   text: pill.label
+                  textFormat: Text.PlainText
                   color: root.pickerText
                   font.family: Style.font.menuFamily
                   font.pixelSize: Style.font.subtitle
@@ -1211,6 +1215,7 @@ Item {
                       width: parent.width - Style.spacing.md
                       visible: !thumb.topl.wayland
                       text: thumb.topl.title || ""
+                      textFormat: Text.PlainText
                       color: root.foreground
                       font.family: Style.font.menuFamily
                       font.pixelSize: Style.font.bodySmall

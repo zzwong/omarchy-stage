@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "zzwong.stage",
   "name": "Stage",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "zzwong",
   "license": "MIT",
   "description": "Mission Control-style workspace overview: zoomed-out live window previews, click to jump.",
