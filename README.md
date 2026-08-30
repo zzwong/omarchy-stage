@@ -3,7 +3,7 @@
 [![version](https://img.shields.io/github/manifest-json/v/zzwong/omarchy-stage?label=version&color=blue)](CHANGELOG.md)
 [![lint](https://github.com/zzwong/omarchy-stage/actions/workflows/lint.yml/badge.svg)](https://github.com/zzwong/omarchy-stage/actions/workflows/lint.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![marketplace](https://img.shields.io/badge/omarchy-marketplace-8839ef.svg)](https://omarchyplugins.com/plugin.html?id=zzwong.stage)
+[![marketplace](https://img.shields.io/badge/omarchy-marketplace-8839ef.svg)](https://plugins.omarchy.org/plugin.html?id=zzwong.stage)
 
 Mission Control for Omarchy. One keypress (or a three-finger swipe) shows
 every workspace as a live preview in the theme-picker's slice carousel;
