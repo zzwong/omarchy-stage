@@ -7,6 +7,7 @@ import Quickshell.Widgets
 import Quickshell.Services.Mpris
 import Quickshell.Services.Pipewire
 import QtQuick
+import "CloseLogic.js" as CloseLogic
 import QtQuick.Effects
 import QtQuick.Shapes
 import qs.Commons
@@ -189,13 +190,38 @@ Item {
   // Pane mode: a third zoom level inside the carousel's expanded preview.
   // -1 = off; otherwise an index into selectedPanes.
   property int paneIndex: -1
-  onSelectedIndexChanged: paneIndex = -1
+  property string stablePaneAddress: ""
+  property bool reconcilingSelection: false
+  property int selectedWorkspaceId: -1
+  onPaneIndexChanged: {
+    if (!reconcilingSelection)
+      stablePaneAddress = paneIndex >= 0 && paneIndex < selectedPanes.length
+        ? String(selectedPanes[paneIndex].address) : ""
+  }
+  onSelectedIndexChanged: {
+    if (!reconcilingSelection) {
+      paneIndex = -1
+      selectedWorkspaceId = selectedIndex >= 0 && selectedIndex < workspaceList.length
+        ? workspaceList[selectedIndex].id : -1
+    }
+  }
+  onSelectedPanesChanged: Qt.callLater(root.reconcilePanes)
+
+  function reconcilePanes() {
+    var addresses = selectedPanes.map(function(p) { return String(p.address) })
+    reconcilingSelection = true
+    paneIndex = CloseLogic.neighbor(addresses, stablePaneAddress, paneIndex)
+    reconcilingSelection = false
+    stablePaneAddress = paneIndex >= 0 ? addresses[paneIndex] : ""
+  }
   onViewModeChanged: paneIndex = -1
 
   // Windows of the selected workspace in left-to-right, top-to-bottom order.
   readonly property var selectedPanes: {
     if (selectedIndex < 0 || selectedIndex >= workspaceList.length) return []
-    var vals = workspaceList[selectedIndex].toplevels.values
+    var workspace = workspaceList[selectedIndex]
+    if (!workspace) return []
+    var vals = workspace.toplevels.values
     var arr = []
     for (var i = 0; i < vals.length; i++) arr.push(vals[i])
     arr.sort(function(a, b) {
@@ -209,8 +235,7 @@ Item {
   }
 
   readonly property string paneAddress:
-    (paneIndex >= 0 && paneIndex < selectedPanes.length)
-    ? String(selectedPanes[paneIndex].address) : ""
+    paneIndex >= 0 ? stablePaneAddress : ""
 
   // One slot per workspace plus the trailing "new workspace" slot.
   readonly property int slotCount: workspaceList.length + 1
@@ -223,7 +248,13 @@ Item {
     return max + 1
   }
 
-  function rebuildWorkspaces() {
+  readonly property var liveWorkspaces: Hyprland.workspaces.values
+  onLiveWorkspacesChanged: if (opened) Qt.callLater(function() { root.rebuildWorkspaces(true) })
+
+  function rebuildWorkspaces(preserve) {
+    var oldId = selectedWorkspaceId
+    var oldIndex = selectedIndex
+    var wasPlus = oldId === -1 && selectedIndex >= 0
     var out = []
     var values = Hyprland.workspaces.values
     for (var i = 0; i < values.length; i++) {
@@ -233,6 +264,22 @@ Item {
       out.push(ws)
     }
     out.sort(function(a, b) { return a.id - b.id })
+    if (preserve) {
+      root.reconcilingSelection = true
+      root.workspaceList = out
+      var idx = out.findIndex(function(w) { return w.id === oldId })
+      root.selectedIndex = wasPlus ? out.length
+        : idx >= 0 ? idx : out.length ? Math.min(Math.max(0, oldIndex), out.length - 1) : -1
+      root.selectedWorkspaceId = root.selectedIndex >= 0 && root.selectedIndex < out.length
+        ? out[root.selectedIndex].id : -1
+      if (root.selectedWorkspaceId !== oldId) {
+        root.paneIndex = -1
+        root.stablePaneAddress = ""
+      }
+      root.reconcilingSelection = false
+      root.reconcilePanes()
+      return
+    }
     root.workspaceList = out
 
     root.selectedIndex = out.length > 0 ? 0 : -1
@@ -240,6 +287,7 @@ Item {
       if (Hyprland.focusedWorkspace && out[j].id === Hyprland.focusedWorkspace.id)
         root.selectedIndex = j
     }
+    root.selectedWorkspaceId = root.selectedIndex >= 0 ? out[root.selectedIndex].id : -1
   }
 
   // --- Hold-to-cycle ("cycle" keybindMode) -----------------------------
@@ -309,6 +357,54 @@ Item {
 
   function luaDispatch(lua) {
     Quickshell.execDetached(["hyprctl", "dispatch", lua])
+  }
+
+  // A bounded per-address debounce, not an optimistic removal: applications
+  // may decline or show a dialog. Explicit selectors resolve again inside
+  // Hyprland at execution; a missing match is a null window, NOT active focus.
+  property var pendingCloses: ({})
+  property bool closeKeyHeld: false
+  function requestWindowClose(value) {
+    root.cycled = false
+    holdWatchdog.stop()
+    var addr = CloseLogic.address(value)
+    var live = Hyprland.toplevels.values.map(function(p) { return CloseLogic.address(p.address) })
+    var now = Date.now()
+    if (!CloseLogic.canRequest(addr, live, pendingCloses, now)) return
+    var next = ({})
+    for (var key in pendingCloses)
+      if (pendingCloses[key] > now) next[key] = pendingCloses[key]
+    next[addr] = now + 2000
+    pendingCloses = next
+    root.luaDispatch(CloseLogic.closeLua(addr))
+  }
+
+  component CloseControl: Rectangle {
+    id: closeControl
+    required property string address
+    property string windowTitle: "window"
+    width: 32
+    height: 32
+    radius: 8
+    color: closeMouse.containsMouse ? root.selectedBorder : root.background
+    border.color: root.border
+    Accessible.role: Accessible.Button
+    Accessible.name: "Close " + windowTitle
+    Accessible.onPressAction: root.requestWindowClose(closeControl.address)
+    Text {
+      anchors.centerIn: parent
+      text: "×"
+      color: root.foreground
+      font.pixelSize: 24
+    }
+    MouseArea {
+      id: closeMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      // Never propagate to the thumbnail's focus or background dismiss area.
+      onClicked: root.requestWindowClose(closeControl.address)
+    }
   }
 
   function focusWorkspace(id) {
@@ -499,10 +595,20 @@ Item {
               }
             }
 
+            HoverHandler { id: thumbHover }
             MouseArea {
               anchors.fill: parent
               enabled: slab.selected
               onClicked: slab.windowActivated(thumb.topl.address)
+            }
+            CloseControl {
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: 8
+              visible: slab.selected && thumb.width >= 64 && thumb.height >= 64
+                       && (thumbHover.hovered || thumb.paneSelected)
+              address: String(thumb.topl.address)
+              windowTitle: String(thumb.topl.title || "window")
             }
           }
         }
@@ -661,6 +767,11 @@ Item {
       // modifier state, so any other would commit on one never cycled with.
       Keys.onReleased: function(event) {
         if (event.isAutoRepeat) return
+        if (event.key === Qt.Key_X) {
+          root.closeKeyHeld = false
+          event.accepted = true
+          return
+        }
         if (root.keybindMode !== "cycle" || !root.cycled) return
         if (event.key !== Qt.Key_Meta && event.key !== Qt.Key_Super_L
             && event.key !== Qt.Key_Super_R) return
@@ -674,6 +785,17 @@ Item {
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
+
+        if (event.key === Qt.Key_X) {
+          var firstPress = !root.closeKeyHeld && !event.isAutoRepeat
+          root.closeKeyHeld = true
+          if (panes && event.modifiers === Qt.NoModifier && firstPress) {
+            root.kbdPriority = true
+            root.requestWindowClose(root.paneAddress)
+          }
+          event.accepted = true
+          return
+        }
 
         if (event.key === Qt.Key_Escape) {
           root.dismiss()
@@ -941,7 +1063,7 @@ Item {
           }
 
           width: content.implicitWidth + Style.space(20)
-          height: Style.space(30)
+          height: Math.max(32, Style.space(30))
           radius: height / 2
           color: Util.alpha(root.pickerText,
                             (pillMouse.containsMouse || pill.paneSelected) ? 0.16 : 0.08)
@@ -1090,6 +1212,13 @@ Item {
               }
             }
 
+            // Always discoverable, including when the preview is too small.
+            CloseControl {
+              anchors.verticalCenter: parent.verticalCenter
+              address: String(pill.topl.address)
+              windowTitle: pill.label
+            }
+
             // Audio badge for windows making sound without MPRIS metadata.
             Text {
               visible: pill.audible
@@ -1224,9 +1353,18 @@ Item {
                     }
                   }
 
+                  HoverHandler { id: cardThumbHover }
                   MouseArea {
                     anchors.fill: parent
                     onClicked: root.focusWindow(thumb.topl.address)
+                  }
+                  CloseControl {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 8
+                    visible: thumb.width >= 64 && thumb.height >= 64 && cardThumbHover.hovered
+                    address: String(thumb.topl.address)
+                    windowTitle: String(thumb.topl.title || "window")
                   }
                 }
               }

@@ -66,6 +66,8 @@ Then drop the keybind or gestures you added.
 | `1`–`9` | jump to that workspace directly |
 | click a slice | select it |
 | click the expanded preview | jump — window thumbnails are individually clickable |
+| `X` (no modifiers, pane mode only) | request graceful close of the selected window; hold/repeat never closes another pane |
+| `×` on a thumbnail / title pill | request graceful close without leaving Stage |
 | the `+` slot at the end | create the next workspace |
 | `Esc` / click outside | close |
 
@@ -73,7 +75,46 @@ Below the carousel, one pill per window. Windows with an MPRIS player
 (Spotify, browsers, mpv) show album art, artist — track, and a play/pause
 button that works without leaving the overview. Windows emitting audio
 without MPRIS get a speaker badge. Labels that don't fit marquee on hover.
-Every pill is click-to-focus.
+Every pill is click-to-focus outside its dedicated controls.
+
+### Closing windows
+
+The 32px `×` target appears on thumbnail hover, or on keyboard-selected
+panes. Picker carousel/grid expose it on the selected workspace only; title
+pills also have an always-visible `×` as a fallback for tiny previews. Cards
+expose hover controls on individual previews, but have no pane mode or title
+pill fallback. Thumbnails smaller than 64px in either dimension omit the
+control rather than covering ordinary click targets; use picker pills for
+those windows. This change adds no movement or dragging controls.
+
+Closing sends Hyprland's normal close request, **never kill**. Stage stays
+open and previews disappear only when the compositor removes the window.
+Selection tracks the same window across geometry changes; when it actually
+closes, the next pane (or previous at the end) is selected. Empty workspaces
+leave pane mode. Duplicate requests to the same address are suppressed for
+two seconds; after that you can retry if the application declines. Unsaved-work
+dialogs may require focusing the application to answer them. Closing disarms
+hold-to-cycle's release-to-focus action.
+
+#### Close-controls QA
+
+Automated: `node tests/close-controls.test.cjs`, plus the lint workflow commands.
+Manual checklist (requires an isolated compositor or disposable windows; not
+performed as part of the draft implementation):
+
+- In carousel, grid, and cards, hover a preview and click `×`: Stage stays
+  open; clicking elsewhere still focuses normally. Check small previews and
+  picker pill fallback, including media play/pause and long titles.
+- Enter pane mode with `↓`, close first/middle/last windows using `X`, and
+  hold `X` across removal: only the original window receives a request.
+- Modified `X`, grid/cards `X`, and autorepeat must not close windows.
+- Decline an unsaved-work prompt; preview remains, and retry works after two
+  seconds. Verify closing a pending window externally and workspace removal.
+- Reorder window geometry externally: selection stays at the same address.
+  Close the last pane; no stale selection or accidental focus/dismissal.
+- Begin a mouse close after a cycle step: releasing Super must not activate.
+  Inspect hover/keyboard visibility, 32px hit targets, clipping and accessibility
+  names at different display scales.
 
 ## Settings
 
