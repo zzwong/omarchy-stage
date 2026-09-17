@@ -32,6 +32,13 @@ assert.equal(assignments.length, 1,
              'rebuildWorkspaces assigns selectedIndex exactly once, got '
              + assignments.length);
 
+// The thumbnail Repeaters bind the ObjectModel, not its values array: an
+// array is a new model on every membership change, which recreates every
+// delegate and restarts every live capture.
+for (const line of qml.split('\n'))
+  assert.ok(!/^\s*model:.*toplevels\.values/.test(line),
+            'Repeater models bind toplevels, not toplevels.values: ' + line.trim());
+
 // The shared logic lives in one importable module.
 assert.ok(/import "StageLogic\.js" as StageLogic/.test(qml), 'StageLogic.js is imported');
 assert.ok(!/CloseLogic/.test(qml), 'CloseLogic.js is gone');
@@ -39,4 +46,4 @@ assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: no polling timer, one selectedIndex assignment, one logic module');
+console.log('Stage.qml: no polling timer, one selectedIndex assignment, model-backed Repeaters');

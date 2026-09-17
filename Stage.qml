@@ -575,7 +575,11 @@ Item {
         }
 
         Repeater {
-          model: slab.workspace ? slab.workspace.toplevels.values : []
+          // The ObjectModel itself, not its `values` array: an array is a new
+          // model on every membership change, which recreates every delegate
+          // and restarts every live capture. The model reports inserts and
+          // removes, so the surviving thumbnails keep their captures.
+          model: slab.workspace ? slab.workspace.toplevels : null
 
           delegate: Item {
             id: thumb
@@ -1347,7 +1351,9 @@ Item {
               }
 
               Repeater {
-                model: slot.workspace.toplevels.values
+                // The model itself, so a close does not restart the
+                // surviving captures. See the carousel Repeater.
+                model: slot.workspace.toplevels
 
                 delegate: Item {
                   id: thumb
