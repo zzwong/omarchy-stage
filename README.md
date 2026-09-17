@@ -99,7 +99,11 @@ while Stage stays open: Stage refreshes window geometry on the compositor's
 events — all of them but the handful that provably move nothing — and after
 each request it sends itself, since several Hyprland dispatchers re-tile
 while announcing nothing at all. A burst is batched into one refresh, so
-nothing has to be reopened to look right. Duplicate requests to the same address are suppressed for
+nothing has to be reopened to look right. Workspaces arriving and leaving are
+batched the same way, and each slot is keyed by its workspace rather than by
+its position, so a workspace appearing in the middle of the row leaves the
+previews either side of it — and the live captures inside them — running
+untouched. Duplicate requests to the same address are suppressed for
 two seconds; after that you can retry if the application declines. Unsaved-work
 dialogs may require focusing the application to answer them. Closing disarms
 hold-to-cycle's release-to-focus action.
@@ -123,6 +127,9 @@ Manual checklist (requires an isolated compositor or disposable windows):
 - Modified `X`, grid/cards `X`, and autorepeat must not close windows.
 - Decline an unsaved-work prompt; preview remains, and retry works after two
   seconds. Verify closing a pending window externally and workspace removal.
+- With Stage open, create and destroy several workspaces in one `hyprctl
+  --batch`: the row settles in one step and the previews on the workspaces
+  you did not touch keep playing rather than blinking out and restarting.
 - Reorder window geometry externally: selection stays at the same address.
   Close the last pane; no stale selection or accidental focus/dismissal.
 - Begin a mouse close after a cycle step: releasing Super must not activate.

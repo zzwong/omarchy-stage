@@ -267,6 +267,36 @@ Item {
   readonly property int slotCount: workspaceList.length + 1
   readonly property bool plusSelected: selectedIndex === workspaceList.length
 
+  // The "+" slot's stand-in in the slot model. One instance for the life of
+  // the overlay, so the model sees the same object on every rebuild and the
+  // slot at the end of the row is never the one that got recreated. A slab
+  // renders it as the "+" card by the same `workspace: null` convention the
+  // component already uses.
+  readonly property QtObject plusSlot: QtObject {}
+
+  // Slot delegates are keyed by workspace identity, not by position. A
+  // rebuild reassigns `workspaceList`, and an `int` model (or a plain array)
+  // would then hand every slab after an insertion a different workspace:
+  // its thumbnails are bound to `workspace.toplevels`, so they are recreated
+  // and every live capture restarts on cards nothing happened to.
+  // ScriptModel diffs the replaced array and reports only the inserts and
+  // removes that really happened, so the untouched slabs survive.
+  ScriptModel {
+    id: slotModel
+    // Identity, not the default structural compare: two workspaces are the
+    // same slot when they are the same object, never when they merely look
+    // alike.
+    comparisonMode: ObjectComparison.Identity
+    values: root.workspaceList.concat([root.plusSlot])
+  }
+
+  // The "cards" style has no "+" slot, so it takes the list as it is.
+  ScriptModel {
+    id: workspaceModel
+    comparisonMode: ObjectComparison.Identity
+    values: root.workspaceList
+  }
+
   function nextWorkspaceId() {
     return StageLogic.nextWorkspaceId(
       root.workspaceList.map(function(w) { return w.id }))
@@ -1078,15 +1108,18 @@ Item {
         MouseArea { anchors.fill: parent; onClicked: {} }
 
         Repeater {
-          model: root.slotCount
+          // The slot model, not `slotCount`: an int model re-binds every
+          // delegate's `workspace` when the list shifts. See slotModel.
+          model: slotModel
 
           delegate: WsSlab {
             id: caroItem
+            required property var modelData
             required property int index
 
             readonly property int relativeIndex: index - root.selectedIndex
 
-            workspace: index < root.workspaceList.length ? root.workspaceList[index] : null
+            workspace: modelData === root.plusSlot ? null : modelData
             selected: index === root.selectedIndex
             skew: pickerCard.expandedH * root.skewSlope
             highlightAddress: selected ? root.paneAddress : ""
@@ -1134,14 +1167,16 @@ Item {
           rowSpacing: root.gridGap
 
           Repeater {
-            model: root.slotCount
+            // The slot model. See the carousel Repeater.
+            model: slotModel
 
             delegate: WsSlab {
+              required property var modelData
               required property int index
 
               width: gridView.cardW
               height: gridView.cardH
-              workspace: index < root.workspaceList.length ? root.workspaceList[index] : null
+              workspace: modelData === root.plusSlot ? null : modelData
               selected: index === root.selectedIndex
               skew: gridView.cardH * root.skewSlope
               chipAlways: true
@@ -1466,7 +1501,9 @@ Item {
         spacing: cardGap
 
         Repeater {
-          model: root.workspaceList
+          // The model, not the array: a reassigned array is a new model and
+          // recreates every card. See slotModel.
+          model: workspaceModel
 
           delegate: Item {
             id: slot

@@ -70,7 +70,21 @@ for (const line of qml.split('\n')) {
             'Repeater models bind toplevels, not toplevels.values: ' + line.trim());
   assert.ok(!/^\s*model:.*selectedPanes/.test(line),
             'Repeater models bind toplevels, not the sorted array: ' + line.trim());
+  // Slabs are keyed by workspace identity, for the same reason. An int model
+  // re-binds `workspace` on every slab after an insertion -- and with it the
+  // thumbnails bound to `workspace.toplevels` -- and a plain array is a new
+  // model on every rebuild, so both restart live captures on cards nothing
+  // happened to.
+  assert.ok(!/^\s*model:\s*root\.slotCount\b/.test(line),
+            'slab Repeaters bind the slot model, not a count: ' + line.trim());
+  assert.ok(!/^\s*model:\s*root\.workspaceList\b/.test(line),
+            'slab Repeaters bind the slot model, not the array: ' + line.trim());
 }
+const scriptModels = (qml.match(/^\s*ScriptModel\s*\{/gm) || []).length;
+assert.equal(scriptModels, 2, 'the slot and workspace models are ScriptModels');
+assert.equal((qml.match(/comparisonMode:\s*ObjectComparison\.Identity/g) || []).length,
+             scriptModels,
+             'every ScriptModel keys its rows by object identity, not by shape');
 
 // A close, a drag or an edit disarms hold-to-cycle and stops the watchdog
 // together; two writers of `cycled` is how one of them gets forgotten.
@@ -85,4 +99,4 @@ assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, model-backed Repeaters, one cycle disarm');
+console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, identity-keyed models, one cycle disarm');
