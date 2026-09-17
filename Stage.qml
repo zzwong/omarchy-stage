@@ -383,7 +383,6 @@ Item {
     settingsProbe.running = true
     root.kbdPriority = false
     root.cycled = false
-    root.closeKeyHeld = false // Esc while X was held must not eat the next X
     holdWatchdog.stop()
     // Reopening on the same workspace changes neither viewMode nor
     // selectedIndex, so nothing else clears a stale pane zoom.
@@ -397,7 +396,6 @@ Item {
   function close() {
     root.opened = false
     root.cycled = false
-    root.closeKeyHeld = false
     holdWatchdog.stop()
     geometryRefresh.stop()
   }
@@ -445,14 +443,16 @@ Item {
   // may decline or show a dialog. Explicit selectors resolve again inside
   // Hyprland at execution; a missing match is a null window, NOT active focus.
   property var pendingCloses: ({})
-  property bool closeKeyHeld: false
   function requestWindowClose(value) {
-    root.cycled = false
-    holdWatchdog.stop()
     var addr = StageLogic.address(value)
     var live = Hyprland.toplevels.values.map(function(p) { return StageLogic.address(p.address) })
     var now = Date.now()
     if (!StageLogic.canRequest(addr, live, root.pendingCloses, now)) return
+    // Only a request that is actually going out disarms hold-to-cycle: a
+    // debounced repeat or a click on a preview the compositor has already
+    // dropped must not silently cancel the release-to-focus the user set up.
+    root.cycled = false
+    holdWatchdog.stop()
     var next = StageLogic.prunePending(root.pendingCloses, now)
     next[addr] = now + 2000
     root.pendingCloses = next
@@ -871,11 +871,6 @@ Item {
       // modifier state, so any other would commit on one never cycled with.
       Keys.onReleased: function(event) {
         if (event.isAutoRepeat) return
-        if (event.key === Qt.Key_X) {
-          root.closeKeyHeld = false
-          event.accepted = true
-          return
-        }
         if (root.keybindMode !== "cycle" || !root.cycled) return
         if (event.key !== Qt.Key_Meta && event.key !== Qt.Key_Super_L
             && event.key !== Qt.Key_Super_R) return
@@ -890,10 +885,12 @@ Item {
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
 
+        // Held X must never cascade onto the pane the hand-off selects.
+        // QtWayland marks every repeat of a client-side autorepeat, so the
+        // first press is the only one without the flag: no latch to hold, and
+        // none to be left set when focus leaves mid-hold.
         if (event.key === Qt.Key_X) {
-          var firstPress = !root.closeKeyHeld && !event.isAutoRepeat
-          root.closeKeyHeld = true
-          if (panes && event.modifiers === Qt.NoModifier && firstPress) {
+          if (panes && event.modifiers === Qt.NoModifier && !event.isAutoRepeat) {
             root.kbdPriority = true
             root.requestWindowClose(root.paneAddress)
           }
