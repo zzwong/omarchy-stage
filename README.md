@@ -67,6 +67,8 @@ Then drop the keybind or gestures you added.
 | click a slice | select it |
 | click the expanded preview | jump — window thumbnails are individually clickable |
 | `X` (no modifiers, pane mode only) | request graceful close of the selected window; hold/repeat never closes another pane |
+| `Shift` + `←` `→` `↑` `↓` (pane mode only) | swap the selected window with its tiled neighbour in that direction |
+| `Ctrl-Shift` + `←` `→` (pane mode only) | send the selected window to the previous/next workspace in the row, without leaving Stage |
 | `×` on a thumbnail / title pill | request graceful close without leaving Stage |
 | the `+` slot at the end | create the next workspace |
 | `Esc` / click outside | close |
@@ -203,6 +205,59 @@ Manual checklist (requires an isolated compositor or disposable windows):
 - Drag a grouped window: no proxy, and no move even if one is forced past the
   affordance — the compositor refuses it. Drag with a close `×` visible: the
   `×` still closes, and dragging from elsewhere on the thumbnail works.
+
+### Moving windows
+
+In pane mode, `Shift` + an arrow swaps the selected window with the tiled
+window next to it in that direction, and `Ctrl-Shift` + `←`/`→` sends it to
+the workspace next to this one in the row Stage is showing. Stage stays open
+and the selection stays on the window: after a swap the highlight follows it
+into its new place, and after a move Stage scrolls to the workspace it landed
+on. The desktop's own workspace does not change — nothing is focused and
+nothing is switched to until you press `Enter`.
+
+Destinations are the neighbouring entries of the row, not the next workspace
+number: with workspaces 1, 3 and 7 on screen the window goes 1 → 3 → 7 and
+back. There is no wrapping at either end, no special workspaces, and a
+workspace is never created on the way — the `+` slot is still the only way to
+make one. Swaps pick the nearest window whose centre lies in that direction
+and whose span overlaps the selected window's, on the same workspace and
+monitor, so a window that only touches it diagonally is not a neighbour and
+an edge is simply a no-op.
+
+Both operations act on ordinary tiled windows: a floating, grouped, hidden or
+fullscreen window is deliberately left alone, and so is a window that stopped
+being any of those things since Stage drew it. Each edit is a **single**
+Hyprland Lua dispatch that resolves the window, chooses the neighbour or
+destination and performs the swap or move inside the compositor, so nothing
+is ever decided against geometry that has already changed, and there is no
+helper process, no polling and no Python dependency. Keys that arrive while
+one is in flight are dropped rather than queued, so holding a chord steps
+again as soon as the last step lands instead of replaying stale ones; `Esc`
+still dismisses. Editing disarms hold-to-cycle's release-to-focus action.
+
+#### Moving-windows QA
+
+Automated: `node tests/run.cjs` (the `routeKey` matrix, the generated Lua, and
+that Lua executed against a mocked compositor in `tests/edit.lua`), plus the
+lint workflow commands. Manual checklist (isolated compositor or disposable
+windows):
+
+- In a 2×2 tiling, `Shift` + each arrow swaps with the right neighbour and the
+  highlight stays on the same window as its pane index moves.
+- Every outer edge, and a diagonal-only neighbour, are no-ops: no geometry
+  change, nothing lands on another workspace or monitor.
+- With workspaces 1, 3, 7: `Ctrl-Shift-→` walks 1 → 3 → 7 and `Ctrl-Shift-←`
+  back, creating no 2/4/8 and never wrapping. Stage stays open, the selection
+  follows, the desktop's workspace does not move, and emptying a workspace
+  removes it from the row without warnings.
+- Floating, grouped and fullscreen selections do nothing.
+- Hold an editing chord and alternate chords quickly: no stale queued edits.
+- `Ctrl`/`Alt`/`Super` + arrow neither edit nor navigate; ordinary arrows,
+  `Tab`/`Shift-Tab`, `Enter`, `↑`/`↓` zoom and the keypad's arrows and `Enter`
+  still work.
+- In `keybindMode: "cycle"`, an edit disarms the commit and a later step
+  re-arms it.
 
 ## Settings
 
