@@ -817,6 +817,58 @@ Item {
     root.dispatch(lua)
   }
 
+  // --- Keyboard editing ------------------------------------------------
+  // Shift+arrow swaps the selected pane with a tiled neighbour; Ctrl+Shift+
+  // ←/→ sends it to the workspace next to this one in the list Stage is
+  // showing. Both are a single Lua chunk: Hyprland resolves the source,
+  // picks the neighbour or destination and dispatches, all in one call, so
+  // no decision is made against geometry that has already changed. Nothing
+  // here polls, and there is no helper to time out — `editBusy` lasts
+  // exactly as long as the dispatch the compositor is answering.
+  property bool editBusy: false
+
+  // Edits run their own process rather than the shared dispatcher: this is
+  // the one action that has to know when the compositor is done, and
+  // `hyprctl dispatch` replies only once it is. There is never more than one
+  // in flight — routeKey drops keys while editBusy — so there is nothing to
+  // queue. The chunk's "swap"/"move"/"noop" tag does not come back here:
+  // hyprctl answers "ok" whatever the Lua closure returns (verified against
+  // 0.56.2), so a no-op is indistinguishable from a swap at this end.
+  Process {
+    id: editRunner
+    stdout: StdioCollector { id: editOut }
+    stderr: StdioCollector { id: editErr }
+    onExited: function(exitCode) {
+      root.editBusy = false
+      if (exitCode !== 0)
+        console.warn("Stage: keyboard edit failed (exit " + exitCode + "): "
+                     + (String(editErr.text).trim() || String(editOut.text).trim()))
+      // A move announces itself (movewindowv2) but a swap inside one
+      // workspace emits no event at all — verified against 0.56.2 — so the
+      // previews would keep the pre-swap rectangles. The reply means the
+      // dispatcher has already run and the layout is final; this is the same
+      // single-shot refresh the compositor's own events use, so an edit that
+      // did both coalesces into one round trip.
+      geometryRefresh.restart()
+    }
+  }
+
+  function editPane(action, direction) {
+    root.cycled = false // an edit is not a step; releasing Super must not commit
+    holdWatchdog.stop()
+    root.kbdPriority = true
+    if (root.editBusy) return
+    var shown = []
+    for (var i = 0; i < root.workspaceList.length; i++) {
+      var ws = root.workspaceList[i]
+      if (ws && ws.id > 0) shown.push(ws.id)
+    }
+    var lua = StageLogic.editLua(root.paneAddress, action, direction, shown)
+    if (!lua) return
+    root.editBusy = true
+    editRunner.exec(["hyprctl", "dispatch", lua])
+  }
+
   // Skewed workspace slab: the one visual unit shared by the carousel, the
   // grid, and the "new workspace" slot (workspace: null).
   component WsSlab: Item {
@@ -1219,40 +1271,42 @@ Item {
         event.accepted = true
       }
 
+      // What a key press means is a decision with no compositor in it:
+      // StageLogic.routeKey makes it — exact modifiers, the keypad flag
+      // masked off, edits only in pane mode, nothing unrecognised falling
+      // through to navigation — and this carries it out. Anything but
+      // "none" is an accepted event.
       function navigate(event) {
-        // A drag owns the keyboard: Escape cancels the gesture and nothing
-        // navigates out from under it. The overlay stays open, so the next
-        // Escape is the one that dismisses.
-        if (root.dragging) {
-          if (event.key === Qt.Key_Escape && !event.isAutoRepeat)
-            root.endDrag("escape")
-          event.accepted = true
-          return
-        }
-
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
 
-        // Held X must never cascade onto the pane the hand-off selects.
-        // QtWayland marks every repeat of a client-side autorepeat, so the
-        // first press is the only one without the flag: no latch to hold, and
-        // none to be left set when focus leaves mid-hold.
-        if (event.key === Qt.Key_X) {
-          if (panes && event.modifiers === Qt.NoModifier && !event.isAutoRepeat) {
-            root.kbdPriority = true
-            root.requestWindowClose(root.paneAddress)
-          }
-          event.accepted = true
-          return
-        }
+        var command = StageLogic.routeKey(
+          { key: event.key, modifiers: event.modifiers,
+            isAutoRepeat: event.isAutoRepeat },
+          { panes: panes, editBusy: root.editBusy,
+            dragPending: root.dragging })
+        if (command.action === "none") return
+        event.accepted = true
 
-        if (event.key === Qt.Key_Escape) {
-          // Autorepeat excluded: holding Escape to cancel a drag must not
-          // then dismiss on the same press.
-          if (!event.isAutoRepeat) root.dismiss()
-          event.accepted = true
-        } else if (event.key === Qt.Key_Up) {
+        switch (command.action) {
+        case "consume": // a chord Stage does not implement, swallowed
+          break
+        case "dismiss":
+          root.dismiss()
+          break
+        case "dragCancel": // Escape while a thumbnail is held: the gesture, not the overlay
+          root.endDrag("escape")
+          break
+        case "close":
+          root.kbdPriority = true
+          root.requestWindowClose(root.paneAddress)
+          break
+        case "swap":
+        case "move":
+          root.editPane(command.action, command.arg)
+          break
+        case "zoomOut":
           root.kbdPriority = true
           if (panes) {
             root.selectPane(-1)
@@ -1265,8 +1319,8 @@ Item {
           } else if (root.uiStyle === "picker" && root.viewPref === "auto") {
             root.viewMode = "grid"
           }
-          event.accepted = true
-        } else if (event.key === Qt.Key_Down) {
+          break
+        case "zoomIn":
           root.kbdPriority = true
           if (grid) {
             // Move down a row; past the bottom, fall back into the carousel
@@ -1278,23 +1332,17 @@ Item {
             // Zoom one more level: into the panes of the expanded preview.
             root.selectPane(0)
           }
-          event.accepted = true
-        } else if (event.key === Qt.Key_Left
-                   || (event.key === Qt.Key_Tab && event.modifiers & Qt.ShiftModifier)
-                   || event.key === Qt.Key_Backtab) {
+          break
+        case "advance":
           root.kbdPriority = true
-          root.advance(-1)
-          event.accepted = true
-        } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Tab) {
-          root.kbdPriority = true
-          root.advance(1)
-          event.accepted = true
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+          root.advance(command.arg)
+          break
+        case "activate":
           root.activateCurrent()
-          event.accepted = true
-        } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
-          root.focusWorkspace(event.key - Qt.Key_0)
-          event.accepted = true
+          break
+        case "workspace":
+          root.focusWorkspace(command.arg)
+          break
         }
       }
 

@@ -57,9 +57,13 @@ assert.equal(everyAssignment, 2,
 // exec would fail silently, and a `hyprctl dispatch` child would fork a
 // process per click for a reply Quickshell already logs.
 assert.ok(!/execDetached/.test(qml), 'no fire-and-forget dispatch in Stage.qml');
-assert.ok(!/"hyprctl",\s*"dispatch"/.test(qml),
-          'dispatches go through Hyprland.dispatch, not a hyprctl child');
 assert.ok(/Hyprland\.dispatch\(/.test(qml), 'Hyprland.dispatch is used');
+// The one exception is the keyboard edit runner: an edit has to know when the
+// compositor has answered, and `hyprctl dispatch` replies only once it has.
+const hyprctlChildren = qml.match(/"hyprctl",\s*"dispatch"/g) || [];
+assert.equal(hyprctlChildren.length, 1, 'only the edit runner forks hyprctl');
+assert.ok(/editRunner\.exec\(\["hyprctl",\s*"dispatch"/.test(qml),
+          'the hyprctl child is the edit runner');
 
 // Every Repeater over windows binds the ObjectModel, not a JS array: an array
 // is a new model on every membership change *and* on every re-tile (sortPanes
@@ -93,10 +97,22 @@ const disarmers = (qml.match(/cycled\s*=\s*false/g) || []).length;
 assert.equal(disarmers, 2,
              'only disarmCycle() and the watchdog clear `cycled`, got ' + disarmers);
 
+// Key routing is one pure decision in StageLogic, not a chain of key
+// comparisons in the handler: a stray `else if` there is how a modified key
+// reaches navigation.
+const navigate = functionBody(qml, 'navigate');
+assert.ok(/StageLogic\.routeKey\(/.test(navigate), 'navigate() calls routeKey');
+assert.ok(!/Qt\.Key_/.test(navigate),
+          'navigate() compares no keys of its own');
+
+// Edits are dispatched Lua, not a helper process.
+assert.ok(!/python/i.test(qml), 'no python helper');
+assert.ok(/StageLogic\.editLua\(/.test(qml), 'edits go through editLua');
+
 // The shared logic lives in one importable module.
 assert.ok(/import "StageLogic\.js" as StageLogic/.test(qml), 'StageLogic.js is imported');
 assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, identity-keyed models, one cycle disarm');
+console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, identity-keyed models, one cycle disarm, routed keys');
