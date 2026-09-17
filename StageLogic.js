@@ -364,3 +364,196 @@ function dragTransition(state, event) {
              action: event.type === "release" && s.phase === "dragging"
                  ? "move" : "none" }
 }
+
+// --- Keyboard editing ------------------------------------------------------
+//
+// Swapping a pane with its neighbour and moving it to another workspace are
+// one `hyprctl dispatch` each: the chunk below resolves the source, picks the
+// neighbour or destination and dispatches, all inside Hyprland, so nothing
+// can act on geometry that changed between a query and a dispatch. Only
+// values validated here are interpolated into it.
+
+// Qt's key and modifier enum values, repeated so this module -- and the tests
+// that load it -- need no QML engine. They are part of Qt's public ABI and
+// have not changed since Qt 4.
+var KEY = {
+    escape: 0x01000000, tab: 0x01000001, backtab: 0x01000002,
+    ret: 0x01000004, enter: 0x01000005,
+    left: 0x01000012, up: 0x01000013, right: 0x01000014, down: 0x01000015,
+    zero: 0x30, nine: 0x39, x: 0x58
+}
+
+var MOD = {
+    none: 0x00000000, shift: 0x02000000, control: 0x04000000,
+    alt: 0x08000000, meta: 0x10000000, keypad: 0x20000000
+}
+
+// Each direction as the axis the edit happens along, the perpendicular axis
+// the two windows must overlap on, and the sign that puts the neighbour at a
+// positive distance.
+var EDIT_DIRECTIONS = {
+    left:  { axis: "x", across: "y", sign: "-", step: -1 },
+    right: { axis: "x", across: "y", sign: "",  step: 1 },
+    up:    { axis: "y", across: "x", sign: "-", step: 0 },
+    down:  { axis: "y", across: "x", sign: "",  step: 0 }
+}
+
+function arrowDirection(key) {
+    if (key === KEY.left) return "left"
+    if (key === KEY.right) return "right"
+    if (key === KEY.up) return "up"
+    if (key === KEY.down) return "down"
+    return ""
+}
+
+// The Lua chunk for one edit: a closure Hyprland runs, returning "swap",
+// "move" or "noop". `hyprctl dispatch` answers "ok" whatever the closure
+// returns, so the tag is not feedback -- it is what tests/edit.lua asserts on,
+// and what makes each refusal in the chunk a named outcome rather than a
+// silent `return`.
+//
+//   addr      Quickshell handle of the selected window
+//   action    "swap" (with a directional neighbour) | "move" (to a workspace)
+//   direction "left" | "right" | "up" | "down"; a move is horizontal only
+//   shownIds  the workspace ids Stage is showing, in the order it shows them
+//
+// Returns "" for anything it will not build a chunk for.
+function editLua(addr, action, direction, shownIds) {
+    var window = address(addr)
+    var dir = EDIT_DIRECTIONS[direction]
+    if (!window || !dir) return ""
+    if (action !== "swap" && action !== "move") return ""
+    if (action === "move" && dir.step === 0) return ""
+    if (!shownIds || shownIds.length === 0) return ""
+    var ids = []
+    for (var i = 0; i < shownIds.length; i++) {
+        var id = Number(shownIds[i])
+        if (!Number.isFinite(id) || Math.floor(id) !== id || id <= 0) return ""
+        ids.push(id)
+    }
+
+    var selector = '"address:' + window + '"'
+    // The source is resolved, checked and located in the shown list inside
+    // the compositor: by the time this runs the window may have been
+    // unmapped, floated, grouped, fullscreened or moved off the workspace
+    // Stage drew it on, and every one of those is a no-op, never a fallback
+    // to whatever has focus.
+    var lines = [
+        'function()',
+        '  local function ok(w)',
+        '    return w ~= nil and w.mapped and not w.hidden and not w.floating',
+        '      and w.fullscreen == 0 and w.fullscreen_client == 0 and w.group == nil',
+        '  end',
+        '  local s = hl.get_window(' + selector + ')',
+        '  if not ok(s) or s.workspace == nil or s.monitor == nil then return "noop" end',
+        '  local shown = {' + ids.join(', ') + '}',
+        '  local here = nil',
+        '  for i = 1, #shown do if shown[i] == s.workspace.id then here = i end end',
+        '  if here == nil then return "noop" end'
+    ]
+
+    if (action === "swap") {
+        // Nearest centre in the requested half-plane whose perpendicular span
+        // overlaps the source's, ties broken by perpendicular distance and
+        // then by address so the choice never depends on enumeration order.
+        lines = lines.concat([
+            '  local best, bd, bp = nil, 0, 0',
+            '  for _, t in ipairs(hl.get_windows({ workspace = s.workspace })) do',
+            '    if t.address ~= s.address and ok(t) and t.monitor ~= nil',
+            '        and t.monitor.id == s.monitor.id then',
+            '      local d = ' + dir.sign + '((t.at.' + dir.axis + ' + t.size.' + dir.axis + ' / 2)',
+            '        - (s.at.' + dir.axis + ' + s.size.' + dir.axis + ' / 2))',
+            '      local lo = math.max(s.at.' + dir.across + ', t.at.' + dir.across + ')',
+            '      local hi = math.min(s.at.' + dir.across + ' + s.size.' + dir.across + ',',
+            '        t.at.' + dir.across + ' + t.size.' + dir.across + ')',
+            '      if d > 0 and hi > lo then',
+            '        local p = math.abs((t.at.' + dir.across + ' + t.size.' + dir.across + ' / 2)',
+            '          - (s.at.' + dir.across + ' + s.size.' + dir.across + ' / 2))',
+            '        if best == nil or d < bd or (d == bd and (p < bp',
+            '            or (p == bp and t.address < best.address))) then',
+            '          best, bd, bp = t, d, p',
+            '        end',
+            '      end',
+            '    end',
+            '  end',
+            '  if best == nil then return "noop" end',
+            '  hl.dispatch(hl.dsp.window.swap({ window = ' + selector + ',',
+            '    target = "address:" .. best.address }))',
+            '  return "swap"'
+        ])
+    } else {
+        // The destination is the neighbouring entry of the list Stage is
+        // showing, not the next workspace number: no wrapping, no special
+        // workspaces, and a workspace that does not exist is not created.
+        lines = lines.concat([
+            '  local dest = shown[here ' + (dir.step < 0 ? '- 1' : '+ 1') + ']',
+            '  if dest == nil then return "noop" end',
+            '  local target = hl.get_workspace(tostring(dest))',
+            '  if target == nil or target.monitor == nil',
+            '      or target.monitor.id ~= s.monitor.id then return "noop" end',
+            '  hl.dispatch(hl.dsp.window.move({ window = ' + selector + ',',
+            '    workspace = tostring(dest), follow = false }))',
+            '  return "move"'
+        ])
+    }
+
+    lines.push('end')
+    return lines.join('\n')
+}
+
+// What one key press means, as {action, arg}. Every branch that is not
+// "none" is an accepted event: a chord Stage does not implement must never
+// reach ordinary navigation, or Ctrl+Left would walk the carousel.
+//
+//   event.key, event.modifiers, event.isAutoRepeat
+//   ctx.panes         pane mode is active in the carousel
+//   ctx.editBusy      an edit is in flight in the compositor
+//   ctx.closeKeyHeld  X is already down
+function routeKey(event, ctx) {
+    var key = Number(event.key)
+    // Keypad arrows, Enter and digits carry KeypadModifier. They are the same
+    // keys as far as Stage is concerned, so it is masked out before every
+    // exact-modifier comparison below.
+    var mods = Number(event.modifiers || 0) & ~MOD.keypad
+    var panes = !!ctx.panes
+
+    if (key === KEY.escape) return decision("dismiss")
+
+    // An edit is a single compositor round trip. Keys that arrive during it
+    // would act on the geometry it is about to change, so they are dropped
+    // rather than queued -- a held chord simply steps again once it lands.
+    if (ctx.editBusy) return decision("consume")
+
+    // The physical key latches on every press, modified or not: the release
+    // clears it, so holding X can never cascade onto the next pane.
+    if (key === KEY.x)
+        return decision(panes && mods === MOD.none && !ctx.closeKeyHeld
+                        && !event.isAutoRepeat ? "close" : "closeHeld")
+
+    var direction = arrowDirection(key)
+    if (direction && mods === MOD.shift)
+        return panes ? decision("swap", direction) : decision("consume")
+    if (direction && mods === (MOD.control | MOD.shift))
+        return panes && EDIT_DIRECTIONS[direction].step !== 0
+            ? decision("move", direction) : decision("consume")
+
+    // Shift+Tab arrives as Backtab on some layouts and as a shifted Tab on
+    // others; both are navigation, and they are the only modified keys that
+    // are.
+    if ((key === KEY.backtab && (mods === MOD.none || mods === MOD.shift))
+        || (key === KEY.tab && mods === MOD.shift))
+        return decision("advance", -1)
+    if (mods !== MOD.none) return decision("consume")
+
+    if (key === KEY.up) return decision("zoomOut")
+    if (key === KEY.down) return decision("zoomIn")
+    if (key === KEY.left) return decision("advance", -1)
+    if (key === KEY.right || key === KEY.tab) return decision("advance", 1)
+    if (key === KEY.ret || key === KEY.enter) return decision("activate")
+    if (key > KEY.zero && key <= KEY.nine) return decision("workspace", key - KEY.zero)
+    return decision("none")
+}
+
+function decision(action, arg) {
+    return { action: action, arg: arg === undefined ? null : arg }
+}
