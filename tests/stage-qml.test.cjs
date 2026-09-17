@@ -32,10 +32,13 @@ assert.equal(assignments.length, 1,
              'rebuildWorkspaces assigns selectedIndex exactly once, got '
              + assignments.length);
 
-// Every compositor action runs through the dispatcher Process, whose reply is
-// read; a detached exec would fail silently.
+// Compositor actions go over Quickshell's own Hyprland socket. A detached
+// exec would fail silently, and a `hyprctl dispatch` child would fork a
+// process per click for a reply Quickshell already logs.
 assert.ok(!/execDetached/.test(qml), 'no fire-and-forget dispatch in Stage.qml');
-assert.ok(/id:\s*dispatcher/.test(qml), 'the dispatcher Process is present');
+assert.ok(!/"hyprctl",\s*"dispatch"/.test(qml),
+          'dispatches go through Hyprland.dispatch, not a hyprctl child');
+assert.ok(/Hyprland\.dispatch\(/.test(qml), 'Hyprland.dispatch is used');
 
 // The thumbnail Repeaters bind the ObjectModel, not its values array: an
 // array is a new model on every membership change, which recreates every
@@ -51,4 +54,4 @@ assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: no polling timer, one selectedIndex assignment, observable dispatch, model-backed Repeaters');
+console.log('Stage.qml: no polling timer, one selectedIndex assignment, socket dispatch, model-backed Repeaters');

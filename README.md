@@ -102,9 +102,10 @@ dialogs may require focusing the application to answer them. Closing disarms
 hold-to-cycle's release-to-focus action.
 
 Every Stage action — closing, and jumping to a window or workspace — is a
-Hyprland **Lua** dispatch, so Stage needs a Lua config (Omarchy's default).
-Under a hyprlang config the dispatchers do not exist, the actions do nothing,
-and Stage logs one warning naming the rejected dispatch.
+Hyprland **Lua** dispatch, sent over Hyprland's own request socket, so Stage
+needs a Lua config (Omarchy's default). Under a hyprlang config those
+dispatchers do not exist and the actions do nothing: Stage warns once when it
+loads, and Quickshell logs each dispatch the compositor rejects.
 
 #### Close-controls QA
 

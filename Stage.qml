@@ -347,6 +347,7 @@ Item {
       return
     }
 
+    root.warnUnlessLua()
     Hyprland.refreshWorkspaces()
     Hyprland.refreshToplevels() // fresh geometry in lastIpcObject
     wallpaperProbe.running = true
@@ -383,57 +384,32 @@ Item {
     else root.open("{}")
   }
 
-  // Every Stage action is a Hyprland Lua dispatch, and a dispatch that the
-  // compositor rejects is invisible: the overlay would go on offering
-  // controls that do nothing. Run them through one process whose reply is
-  // read — under a hyprlang config every `hl.dsp.*` answers "Invalid
-  // dispatcher" — and warn once per session rather than per click.
-  // `dismiss()` only hides the overlay (the plugin is keepLoaded), so an
-  // in-flight dispatch outlives it.
+  // Every Stage action is a Hyprland Lua dispatch. Quickshell writes these
+  // straight to the socket hyprctl itself talks to — no fork, no exec, no
+  // reply to parse here: it logs any answer but "ok" as "Dispatch request
+  // … failed with error …" on its own. `dismiss()` only hides the overlay
+  // (the plugin is keepLoaded), so a request outlives it.
   function dispatch(lua) {
-    if (lua) dispatcher.submit(lua)
+    if (lua) Hyprland.dispatch(lua)
   }
 
-  Process {
-    id: dispatcher
-
-    // Hyprland answers one request at a time; a second dispatch while one is
-    // in flight queues rather than replacing it, so nothing is dropped.
-    property var queue: []
-    property string current: ""
-    property bool warned: false
-
-    function submit(lua) {
-      dispatcher.queue = dispatcher.queue.concat([lua])
-      dispatcher.pump()
-    }
-
-    function pump() {
-      if (dispatcher.running || dispatcher.queue.length === 0) return
-      dispatcher.current = dispatcher.queue[0]
-      dispatcher.queue = dispatcher.queue.slice(1)
-      dispatcher.exec(["hyprctl", "dispatch", dispatcher.current])
-    }
-
-    stdout: StdioCollector { id: dispatchOut }
-    stderr: StdioCollector { id: dispatchErr }
-
-    onExited: function(exitCode) {
-      var failure = StageLogic.dispatchFailure(exitCode, dispatchOut.text,
-                                               dispatchErr.text)
-      if (failure && !dispatcher.warned) {
-        dispatcher.warned = true
-        console.warn("Stage: hyprctl rejected \"" + dispatcher.current
-          + "\" with \"" + failure + "\". Stage's actions need a Lua Hyprland"
-          + " config (Omarchy's default); a hyprlang config has no hl.dsp"
-          + " dispatchers, so they do nothing.")
-      }
-      dispatcher.current = ""
-      // Deferred: the next process may only start once this one has fully
-      // finished, and the reply above must be read before the collectors
-      // are handed to it.
-      if (dispatcher.queue.length > 0) Qt.callLater(dispatcher.pump)
-    }
+  // `hl.dsp.*` exists only under a Lua config (Omarchy's default); under a
+  // hyprlang config every Stage action would be a silent no-op. Say so once,
+  // rather than per click.
+  //
+  // Not at load: Quickshell resolves `usingLua` from the compositor, and the
+  // reply lands a round trip (~30 ms, measured) after the shell finishes
+  // loading, so the property still reads false then. The first open is the
+  // earliest moment the answer means anything, and the last one before it
+  // matters.
+  property bool luaWarningShown: false
+  function warnUnlessLua() {
+    if (root.luaWarningShown || Hyprland.usingLua) return
+    root.luaWarningShown = true
+    console.warn("Stage: Hyprland is running a hyprlang config, which has no"
+      + " hl.dsp dispatchers. Stage's focus, workspace and close actions all"
+      + " need a Lua Hyprland config (Omarchy's default) and will do nothing"
+      + " until this one is converted.")
   }
 
   // A bounded per-address debounce, not an optimistic removal: applications

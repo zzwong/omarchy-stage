@@ -23,15 +23,6 @@ assert.equal(L.focusWorkspaceLua('4'), 'hl.dsp.focus({ workspace = "4" })');
 assert.equal(L.focusWorkspaceLua('1" }) hl.dsp.exit({'), '', 'rejects injection');
 assert.equal(L.focusWorkspaceLua(1.5), '');
 
-// --- dispatch replies ------------------------------------------------------
-assert.equal(L.dispatchFailure(0, 'ok', ''), '');
-assert.equal(L.dispatchFailure(0, 'ok\n', ''), '', 'trailing newline is still ok');
-assert.equal(L.dispatchFailure(0, 'Invalid dispatcher', ''), 'Invalid dispatcher',
-             'a hyprlang config rejects hl.dsp');
-assert.equal(L.dispatchFailure(1, '', 'Couldn\'t connect to socket'),
-             'Couldn\'t connect to socket');
-assert.equal(L.dispatchFailure(127, '', ''), 'exit 127', 'no hyprctl at all');
-
 // --- close requests --------------------------------------------------------
 assert.equal(L.canRequest('0xa', ['0xa'], {}, 100), true);
 assert.equal(L.canRequest('', ['0xa'], {}, 100), false, 'no address, no request');
@@ -231,4 +222,4 @@ assertPlaced(carousel({ x: 500, y: 300, w: 900, h: 500 }), 'floating window');
   assert.ok(L.luminance(light) > L.luminance(dark));
 }
 
-console.log('StageLogic: addresses, dispatch replies, panes, workspaces, events, placement, contrast');
+console.log('StageLogic: addresses, dispatch strings, panes, workspaces, events, placement, contrast');
