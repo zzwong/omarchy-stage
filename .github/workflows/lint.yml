@@ -25,6 +25,9 @@ jobs:
       # includes the C++ enum parameter types of Quickshell's own signals);
       # this gates on parse errors and every other warning category.
       - name: qmllint Stage.qml
+        # Independent of the tests: a failure in either should not hide the
+        # other's result.
+        if: ${{ !cancelled() }}
         run: |
           /usr/lib/qt6/bin/qmllint \
             --import disable \
@@ -35,4 +38,5 @@ jobs:
             Stage.qml
 
       - name: Validate JSON
+        if: ${{ !cancelled() }}
         run: jq -e . manifest.json settings.example.json > /dev/null

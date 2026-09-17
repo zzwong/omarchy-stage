@@ -481,6 +481,18 @@ Item {
   readonly property real closeControlSize: Style.space(24)
   readonly property real closeControlPad: Style.space(6)
 
+  // Both thumbnail delegates place their control the same way and differ only
+  // in what encloses them: an overscanned, sheared carousel slab, or a flat
+  // card whose content starts at its own origin.
+  function closeSpotFor(thumb, contentX, contentY, frame, skew) {
+    return StageLogic.closeControlPosition({
+      thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
+               height: thumb.height, scale: thumb.scale },
+      content: { x: contentX, y: contentY },
+      slab: { width: frame.width, height: frame.height, skew: skew },
+      size: root.closeControlSize, pad: root.closeControlPad })
+  }
+
   component CloseControl: Rectangle {
     id: closeControl
     required property string address
@@ -720,12 +732,8 @@ Item {
             // intersection instead: the same corner wherever that corner is
             // fully visible, pushed in by the overscan fringe and the skew
             // allowance where it is not.
-            readonly property var closeSpot: StageLogic.closeControlPosition({
-              thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
-                       height: thumb.height, scale: thumb.scale },
-              content: { x: wsContent.x, y: wsContent.y },
-              slab: { width: slab.width, height: slab.height, skew: slab.skew },
-              size: root.closeControlSize, pad: root.closeControlPad })
+            readonly property var closeSpot:
+              root.closeSpotFor(thumb, wsContent.x, wsContent.y, slab, slab.skew)
 
             CloseControl {
               x: thumb.closeSpot.x
@@ -1492,12 +1500,8 @@ Item {
                   // The card clips its content, so a window hanging over the
                   // monitor edge would lose the control; keep it inside. Same
                   // placement as the carousel with no shear and no overscan.
-                  readonly property var closeSpot: StageLogic.closeControlPosition({
-                    thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
-                             height: thumb.height, scale: 1 },
-                    content: { x: 0, y: 0 },
-                    slab: { width: card.width, height: card.height, skew: 0 },
-                    size: root.closeControlSize, pad: root.closeControlPad })
+                  readonly property var closeSpot:
+                    root.closeSpotFor(thumb, 0, 0, card, 0)
 
                   CloseControl {
                     x: thumb.closeSpot.x
