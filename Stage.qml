@@ -232,27 +232,33 @@ Item {
   }
 
   // When the selected window goes away — closed here, or moved off this
-  // workspace — hand pane mode to whatever took its place instead of
-  // dropping the user out a zoom level.
-  property int paneFallbackIndex: 0
-  onPaneIndexChanged: if (paneIndex >= 0) paneFallbackIndex = paneIndex
+  // workspace — hand pane mode to the window that stood next to it instead of
+  // dropping the user out a zoom level. The hand-off follows a window, not a
+  // slot, so it needs the order as it was before the change.
+  property var paneAddresses: []
   onSelectedPanesChanged: {
     // Scope and membership are both read off `selectedWorkspace`, which
     // `selectedPanes` was just derived from, so this can never hand pane mode
     // to a window on a workspace that is only half-selected.
     var ws = root.selectedWorkspace
     var addr = root.selectedPaneAddress
-    if (!addr || !ws || ws.id !== root.paneWorkspaceId) return
     var addresses = root.selectedPanes.map(function(p) { return String(p.address) })
+    var previous = root.paneAddresses
+    root.paneAddresses = addresses
+    if (!addr || !ws || ws.id !== root.paneWorkspaceId) return
     if (addresses.indexOf(addr) >= 0) return // still there, only re-tiled
-    root.selectPane(StageLogic.neighborAfterClose(
-      addresses, addr, root.paneFallbackIndex))
+    root.selectPane(StageLogic.neighborAfterClose(previous, addresses, addr))
   }
   onViewModeChanged: root.selectPane(-1)
 
-  // Windows of the selected workspace in left-to-right, top-to-bottom order.
+  // Windows of the selected workspace in column-major order (left to right,
+  // top to bottom within a column). A workspace the compositor has destroyed
+  // — the last window moved off it — can still be referenced here for the
+  // binding pass before the rebuild: the QObject is gone, so reading
+  // `toplevels` gives undefined.
   readonly property var selectedPanes:
-    selectedWorkspace ? StageLogic.sortPanes(selectedWorkspace.toplevels.values) : []
+    (selectedWorkspace && selectedWorkspace.toplevels)
+      ? StageLogic.sortPanes(selectedWorkspace.toplevels.values) : []
 
   readonly property string paneAddress:
     paneIndex >= 0 ? root.selectedPaneAddress : ""

@@ -92,8 +92,9 @@ glyph on hover. This change adds no movement or dragging controls.
 Closing sends Hyprland's normal close request, **never kill**. Stage stays
 open and previews disappear only when the compositor removes the window.
 Selection tracks the same window across geometry changes; when it actually
-closes, the next pane (or previous at the end) is selected. Empty workspaces
-leave pane mode. The surviving previews pick up the compositor's new tiling
+closes, pane mode goes to the window that stood next to it (the one before it
+at the end of the row), wherever the re-tile has since moved that window.
+Empty workspaces leave pane mode. The surviving previews pick up the compositor's new tiling
 while Stage stays open: Stage refreshes window geometry on the compositor's
 events — all but the handful that provably move nothing — batching a burst
 into one refresh, so nothing has to be reopened to look right. Duplicate requests to the same address are suppressed for

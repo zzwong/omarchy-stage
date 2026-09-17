@@ -52,7 +52,7 @@ const pane = (addr, x, y) => ({ address: addr, lastIpcObject: { at: [x, y] } });
   const panes = L.sortPanes([pane('d', 960, 540), pane('b', 0, 540),
                              pane('c', 960, 0), pane('a', 0, 0)]);
   assert.deepEqual(list(panes).map(p => p.address), ['a', 'b', 'c', 'd'],
-                   'left to right, then top to bottom');
+                   'column-major: down a column, then across');
   const unsorted = [pane('a', 10, 10)];
   assert.notEqual(L.sortPanes(unsorted), unsorted, 'returns a copy');
   assert.deepEqual(list(L.sortPanes([{ address: 'x' }, pane('y', -5, 0)]))
@@ -62,11 +62,20 @@ assert.equal(L.paneIndexFor([pane('a', 0, 0), pane('b', 1, 0)], 'b'), 1);
 assert.equal(L.paneIndexFor([pane('a', 0, 0)], 'b'), -1);
 assert.equal(L.paneIndexFor([pane('a', 0, 0)], ''), -1, 'no selection');
 
-assert.equal(L.neighborAfterClose(['b', 'a'], 'a', 0), 1, 'a reorder keeps the address');
-assert.equal(L.neighborAfterClose(['b', 'c'], 'a', 0), 0, 'a close selects the next');
-assert.equal(L.neighborAfterClose(['a'], 'b', 1), 0, 'the last close selects the previous');
-assert.equal(L.neighborAfterClose([], 'a', 0), -1, 'an empty workspace leaves pane mode');
-assert.equal(L.neighborAfterClose(['a'], '', -1), -1, 'never enters pane mode');
+// The hand-off follows a window, not a slot: closing one re-tiles the rest,
+// so the index the selection used to sit at names somebody else now.
+const handOff = (prev, next, gone) => L.neighborAfterClose(prev, next, gone);
+assert.equal(handOff(['a', 'b', 'c'], ['a', 'c'], 'b'), 1,
+             'the window that stood after it takes pane mode');
+assert.equal(handOff(['a', 'b', 'c'], ['a', 'b'], 'c'), 1,
+             'at the end, the window before it');
+assert.equal(handOff(['a', 'b', 'c'], ['c', 'a'], 'b'), 0,
+             'and it is found wherever the re-tile put it');
+assert.equal(handOff(['a', 'b', 'c'], ['a'], 'b'), 0,
+             'both neighbours gone: the next survivor outwards');
+assert.equal(handOff(['a', 'b'], [], 'a'), -1, 'an empty workspace leaves pane mode');
+assert.equal(handOff(['a'], ['a'], 'b'), -1, 'a window that was never there');
+assert.equal(handOff([], ['a'], ''), -1, 'never enters pane mode');
 
 // --- workspaces ------------------------------------------------------------
 assert.equal(L.nextWorkspaceId([]), 1);

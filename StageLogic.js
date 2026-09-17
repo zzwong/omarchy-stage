@@ -48,7 +48,9 @@ function prunePending(pending, now, drop) {
 
 // --- Panes -----------------------------------------------------------------
 
-// Windows of a workspace in left-to-right, top-to-bottom order.
+// Windows of a workspace in column-major order: left to right, and top to
+// bottom within a column. Pane stepping and the title pills share it, so
+// ←/→ walks a tiled column before moving across.
 function sortPanes(toplevels) {
     var arr = []
     for (var i = 0; i < toplevels.length; i++) arr.push(toplevels[i])
@@ -70,12 +72,29 @@ function paneIndexFor(panes, address) {
 }
 
 // When the selected window goes away -- closed here, or moved off this
-// workspace -- hand pane mode to whatever took its place instead of dropping
-// the user out a zoom level.
-function neighborAfterClose(addresses, selected, fallbackIndex) {
-    if (fallbackIndex < 0 || addresses.length === 0) return -1
-    var found = addresses.indexOf(selected)
-    return found >= 0 ? found : Math.min(fallbackIndex, addresses.length - 1)
+// workspace -- hand pane mode to the window that stood next to it rather than
+// to whatever has since moved into its slot: a close re-tiles the survivors,
+// so the index the selection used to have names a different window by the
+// time this runs.
+//
+//   prev      pane addresses as they were before the change
+//   next      pane addresses now
+//   selected  the address that has gone
+// Returns its index in `next`, or -1 to leave pane mode.
+function neighborAfterClose(prev, next, selected) {
+    var at = prev.indexOf(selected)
+    if (at < 0) return -1
+    // The window after it, then the one before; and outwards from there, so a
+    // burst that took several windows at once still lands on a survivor.
+    for (var i = at + 1; i < prev.length; i++) {
+        var after = next.indexOf(prev[i])
+        if (after >= 0) return after
+    }
+    for (var j = at - 1; j >= 0; j--) {
+        var before = next.indexOf(prev[j])
+        if (before >= 0) return before
+    }
+    return -1
 }
 
 // --- Workspaces ------------------------------------------------------------
