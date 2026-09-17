@@ -1,16 +1,12 @@
-// Keyboard editing: what a key press means (routeKey) and what the compositor
-// is asked to do about it (editLua). Both come from StageLogic.js verbatim;
-// the generated Lua is then executed by tests/edit.lua against a mocked
-// Hyprland API, so the exact string Stage dispatches is what gets tested.
+// Keyboard editing: what a key event means (routeKey), where a move sends the
+// pane (moveDestinationIndex), and what the compositor is asked to do about a
+// swap (swapLua). All three come from StageLogic.js verbatim; the generated
+// Lua is then executed by tests/chunk.lua against a mocked Hyprland API, so
+// the exact string Stage dispatches is what gets tested.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
-
-const root = path.join(__dirname, '..');
-const L = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8'), L);
+const { StageLogic: L } = require('./load.cjs');
 
 // --- the Qt values the module repeats ------------------------------------
 // routeKey compares against its own copies so node needs no QML engine; they
@@ -24,6 +20,9 @@ assert.equal(L.KEY.left, 0x01000012);
 assert.equal(L.KEY.up, 0x01000013);
 assert.equal(L.KEY.right, 0x01000014);
 assert.equal(L.KEY.down, 0x01000015);
+assert.equal(L.KEY.meta, 0x01000022);
+assert.equal(L.KEY.superL, 0x01000053);
+assert.equal(L.KEY.superR, 0x01000054);
 assert.equal(L.KEY.zero, 0x30);
 assert.equal(L.KEY.nine, 0x39);
 assert.equal(L.KEY.x, 0x58);
@@ -35,8 +34,8 @@ assert.equal(L.MOD.keypad, 0x20000000);
 
 // --- routeKey -------------------------------------------------------------
 const K = L.KEY, M = L.MOD;
-const PANE = { panes: true, editBusy: false };
-const LIST = { panes: false, editBusy: false };
+const PANE = { panes: true };
+const LIST = { panes: false };
 
 function route(key, modifiers, ctx, extra) {
   return L.routeKey(Object.assign({ key: key, modifiers: modifiers || 0,
@@ -57,7 +56,7 @@ is(route(K.up, M.shift, PANE), 'swap', 'up');
 is(route(K.down, M.shift, PANE), 'swap', 'down');
 is(route(K.left, M.control | M.shift, PANE), 'move', 'left');
 is(route(K.right, M.control | M.shift, PANE), 'move', 'right');
-// A vertical move has no meaning in a one-dimensional workspace list.
+// A vertical move has no meaning in a one-dimensional workspace row.
 is(route(K.up, M.control | M.shift, PANE), 'consume');
 is(route(K.down, M.control | M.shift, PANE), 'consume');
 
@@ -77,10 +76,27 @@ is(route(K.ret, M.keypad), 'activate');
 is(route(K.down, M.keypad, PANE), 'zoomIn');
 is(route(0x33 /* Key_3 */, M.keypad), 'workspace', 3);
 
+// In cycle mode Super is held down for the overlay's whole life, so every key
+// arrives carrying MetaModifier. Stage has no Super chord of its own, so the
+// flag is never a discriminator -- and without masking it, cycle mode
+// swallows every plain navigation key.
+is(route(K.right, M.meta), 'advance', 1);
+is(route(K.left, M.meta), 'advance', -1);
+is(route(K.up, M.meta), 'zoomOut');
+is(route(K.ret, M.meta), 'activate');
+is(route(0x34 /* Key_4 */, M.meta), 'workspace', 4);
+is(route(K.x, M.meta, PANE), 'close');
+is(route(K.right, M.meta | M.shift, PANE), 'swap', 'right');
+is(route(K.right, M.meta | M.control | M.shift, PANE), 'move', 'right');
+is(route(K.tab, M.meta | M.shift), 'advance', -1);
+// Masking Super does not let anything else through.
+is(route(K.right, M.meta | M.control), 'consume');
+is(route(K.right, M.meta | M.alt), 'consume');
+
 // Every other modified key is swallowed: Ctrl+Left must not walk the
 // carousel, and no chord may reach navigation by accident.
-for (const mods of [M.control, M.alt, M.meta, M.control | M.alt,
-                    M.alt | M.shift, M.meta | M.shift, M.control | M.meta]) {
+for (const mods of [M.control, M.alt, M.control | M.alt, M.alt | M.shift,
+                    M.control | M.meta, M.control | M.alt | M.shift]) {
   is(route(K.left, mods, PANE), 'consume');
   is(route(K.right, mods, LIST), 'consume');
   is(route(K.ret, mods, PANE), 'consume');
@@ -114,144 +130,130 @@ is(route(K.x, 0, PANE, { isAutoRepeat: true }), 'consume');
 is(route(K.escape, 0, PANE, { isAutoRepeat: true }), 'consume'); // a held Escape never dismisses
 
 // A held thumbnail: Escape cancels the drag, nothing else moves the selection.
-const DRAG = { panes: false, editBusy: false, dragPending: true };
+const DRAG = { panes: false, dragPending: true };
 is(route(K.escape, 0, DRAG), 'dragCancel');
 is(route(K.escape, 0, DRAG, { isAutoRepeat: true }), 'consume');
-for (const [key, mods] of [[K.right, 0], [K.up, 0], [K.ret, 0], [K.tab, 0], [0x31, 0], [K.right, M.shift]])
+for (const [key, mods] of [[K.right, 0], [K.up, 0], [K.ret, 0], [K.tab, 0],
+                           [0x31, 0], [K.right, M.shift]])
   is(route(key, mods, DRAG), 'consume');
 
-// While an edit is in flight every key is dropped rather than queued against
-// the geometry it is about to change -- except the one that gets you out.
-const BUSY = { panes: true, editBusy: true };
-is(route(K.escape, 0, BUSY), 'dismiss');
-for (const [key, mods] of [[K.right, M.shift], [K.right, 0], [K.x, 0],
-                           [K.tab, 0], [K.ret, 0], [0x31, 0]])
-  is(route(key, mods, BUSY), 'consume');
-is(route(K.right, M.shift, BUSY, { isAutoRepeat: true }), 'consume');
+// Releases. Only the modifier hold-to-cycle is waiting on commits, and only
+// where a step armed it: an overlay that was never stepped goes on meaning
+// hide, and a gesture in progress owns the keyboard.
+const ARMED = { panes: false, armed: true };
+const release = (key, ctx, extra) =>
+  L.routeKey(Object.assign({ type: 'release', key: key, modifiers: 0,
+                             isAutoRepeat: false }, extra || {}), ctx);
+for (const key of [K.meta, K.superL, K.superR]) {
+  is(release(key, ARMED), 'commit');
+  is(release(key, LIST), 'none', null);          // never stepped
+  is(release(key, { armed: true, dragPending: true }), 'none', null);
+  is(release(key, ARMED, { isAutoRepeat: true }), 'none', null);
+}
+// Any other release is not a commit, however armed the overlay is.
+for (const key of [K.escape, K.right, K.ret, K.x, K.tab, 0x31])
+  is(release(key, ARMED), 'none', null);
 
-// --- editLua: rejected input ----------------------------------------------
+// --- moveDestinationIndex -------------------------------------------------
+// A move walks the row Stage is showing -- 1, 3, 7 -- never the next
+// workspace number, never wrapping, and never off either end.
 const SHOWN = [1, 3, 7];
+assert.equal(L.moveDestinationIndex(SHOWN, 1, false), 1);
+assert.equal(L.moveDestinationIndex(SHOWN, 3, false), 2);
+assert.equal(L.moveDestinationIndex(SHOWN, 7, false), -1, 'no wrap past the end');
+assert.equal(L.moveDestinationIndex(SHOWN, 7, true), 1);
+assert.equal(L.moveDestinationIndex(SHOWN, 3, true), 0);
+assert.equal(L.moveDestinationIndex(SHOWN, 1, true), -1, 'no wrap past the start');
+assert.equal(L.moveDestinationIndex(SHOWN, 4, false), -1, 'a workspace not in the row');
+assert.equal(L.moveDestinationIndex([], 1, false), -1);
+assert.equal(L.moveDestinationIndex([5], 5, false), -1, 'nowhere to go');
+
+// --- swapLua: rejected input ----------------------------------------------
 for (const bad of ['', null, undefined, '0x', '0', '0000', 'zz', 'abc" })',
                    'ab cd', 'abc\nhl.dsp.exit({'])
-  assert.equal(L.editLua(bad, 'swap', 'right', SHOWN), '',
+  assert.equal(L.swapLua(bad, 'right', 1), '',
                'rejects address ' + JSON.stringify(bad));
 for (const bad of ['', null, 'diagonal', 'LEFT', 'up-left'])
-  assert.equal(L.editLua('0xa', 'swap', bad, SHOWN), '',
+  assert.equal(L.swapLua('0xa', bad, 1), '',
                'rejects direction ' + JSON.stringify(bad));
-for (const bad of ['', null, 'close', 'swap ', 'kill'])
-  assert.equal(L.editLua('0xa', bad, 'right', SHOWN), '',
-               'rejects action ' + JSON.stringify(bad));
-// A move is along the workspace list, which has one dimension.
-assert.equal(L.editLua('0xa', 'move', 'up', SHOWN), '');
-assert.equal(L.editLua('0xa', 'move', 'down', SHOWN), '');
-for (const bad of [[], [1, 0], [1, -3], [1, 2.5], [1, '3; hl.dsp.exit({'],
-                   [1, NaN], [1, null], [1, '3px'], [1, {}]])
-  assert.equal(L.editLua('0xa', 'move', 'right', bad), '',
-               'rejects workspaces ' + JSON.stringify(bad));
-// Whatever survives that is an integer, however it was written.
-assert.equal(L.editLua('0xa', 'move', 'right', ['1', '3']),
-             L.editLua('0xa', 'move', 'right', [1, 3]),
-             'numeric strings are the same ids');
-assert.ok(L.editLua('0xa', 'move', 'right', ['1e3']).includes('local shown = {1000}'));
+for (const bad of [0, -1, 1.5, '3; hl.dsp.exit({', NaN, null, '3px', {}])
+  assert.equal(L.swapLua('0xa', 'right', bad), '',
+               'rejects workspace ' + JSON.stringify(bad));
 
-// --- editLua: the chunk ---------------------------------------------------
-const swap = L.editLua('0XAB', 'swap', 'up', [2]);
-assert.ok(swap.startsWith('function()\n') && swap.endsWith('\nend'),
-          'the chunk is one Lua expression');
-assert.ok(swap.includes('hl.get_window("address:0xab")'), 'lowercased, prefixed');
-assert.ok(swap.includes('local shown = {2}'));
-assert.ok(swap.includes('hl.get_windows({ workspace = s.workspace })'),
-          'candidates come from the source\'s own workspace');
-assert.ok(swap.includes('t.monitor.id == s.monitor.id'), 'same monitor only');
-// Up and down measure along y and overlap on x; left and right the other way.
-assert.ok(swap.includes('local d = -((t.at.y + t.size.y / 2)'));
-assert.ok(swap.includes('local lo = math.max(s.at.x, t.at.x)'));
-assert.ok(L.editLua('0xab', 'swap', 'right', [2])
-           .includes('local d = ((t.at.x + t.size.x / 2)'));
-assert.ok(swap.includes('hl.dsp.window.swap({ window = "address:0xab",'));
-assert.ok(!swap.includes('hl.dsp.window.move'), 'a swap never moves');
-assert.equal((swap.match(/hl\.dispatch/g) || []).length, 1, 'one dispatch');
+// --- swapLua: the chunk ---------------------------------------------------
+{
+  const swap = L.swapLua('0XAB', 'up', 2);
+  assert.ok(swap.startsWith('function()\n') && swap.endsWith('\nend'),
+            'the chunk is one Lua expression');
+  assert.ok(swap.includes('hl.get_window("address:0xab")'), 'lowercased, prefixed');
+  assert.ok(swap.includes('s.workspace.id ~= 2'),
+            'a window that has moved since is not rearranged');
+  assert.ok(swap.includes('hl.get_windows({ workspace = s.workspace })'),
+            "candidates come from the source's own workspace");
+  assert.ok(swap.includes('t.monitor.id == s.monitor.id'), 'same monitor only');
+  // Up and down measure along y and overlap on x; left and right the other
+  // way. The axis names appear once, as locals.
+  assert.ok(swap.includes('local along, across = "y", "x"'));
+  assert.ok(swap.includes('local sign = -1'));
+  assert.ok(L.swapLua('0xab', 'right', 2).includes('local along, across = "x", "y"'));
+  assert.ok(L.swapLua('0xab', 'right', 2).includes('local sign = 1'));
+  assert.ok(!swap.includes('hl.dsp.window.move'), 'a swap never moves');
+  assert.equal((swap.match(/hl\.dispatch/g) || []).length, 2,
+               'the swap, and the cursor Hyprland warped');
+}
 
-const move = L.editLua('0xab', 'move', 'right', SHOWN);
-assert.ok(move.includes('local shown = {1, 3, 7}'));
-assert.ok(move.includes('local dest = shown[here + 1]'), 'the next shown entry');
-assert.ok(L.editLua('0xab', 'move', 'left', SHOWN).includes('local dest = shown[here - 1]'));
-assert.ok(move.includes('hl.get_workspace(tostring(dest))'), 'it must already exist');
-assert.ok(move.includes('follow = false'), 'the desktop workspace stays put');
-assert.ok(!move.includes('hl.dsp.window.swap'), 'a move never swaps');
-assert.equal((move.match(/hl\.dispatch/g) || []).length, 1, 'one dispatch');
-
-// --- the chunk, executed --------------------------------------------------
-// Every scenario runs the generated Lua against tests/edit.lua's mocked `hl`.
-// In the `tiled` world 0xa is top-left, 0xb top-right, 0xc bottom-left and
-// 0xd bottom-right of workspace 1, with 0xe alone on 3 and 0xf alone on 7.
-const W = { window: 'window=address:', target: 'target=address:' };
+// --- the chunks, executed -------------------------------------------------
+// Every scenario runs the generated Lua against tests/chunk.lua's mocked
+// `hl`. In the `tiled` world 0xa is top-left, 0xb top-right, 0xc bottom-left
+// and 0xd bottom-right of workspace 1, with 0xe alone on 3 and 0xf alone on 7.
+const restored = ' cursor{x=640,y=480}';
 const swapped = (source, target) =>
-  'swap swap{' + W.target + target + ',' + W.window + source + '}';
-const moved = (source, workspace) =>
-  'move move{follow=false,' + W.window + source + ',workspace=' + workspace + '}';
+  'swap swap{target=address:' + target + ',window=address:' + source + '}' + restored;
 
 const scenarios = [
   // 2x2: each direction picks the neighbour that shares a span with it.
-  ['tiled', '0xa', 'swap', 'right', SHOWN, swapped('0xa', '0xb')],
-  ['tiled', '0xa', 'swap', 'down', SHOWN, swapped('0xa', '0xc')],
-  ['tiled', '0xd', 'swap', 'left', SHOWN, swapped('0xd', '0xc')],
-  ['tiled', '0xd', 'swap', 'up', SHOWN, swapped('0xd', '0xb')],
+  ['tiled', '0xa', 'right', 1, swapped('0xa', '0xb')],
+  ['tiled', '0xa', 'down', 1, swapped('0xa', '0xc')],
+  ['tiled', '0xd', 'left', 1, swapped('0xd', '0xc')],
+  ['tiled', '0xd', 'up', 1, swapped('0xd', '0xb')],
   // Edges: there is nothing that way.
-  ['tiled', '0xa', 'swap', 'left', SHOWN, 'noop '],
-  ['tiled', '0xa', 'swap', 'up', SHOWN, 'noop '],
-  ['tiled', '0xd', 'swap', 'right', SHOWN, 'noop '],
-  ['tiled', '0xd', 'swap', 'down', SHOWN, 'noop '],
+  ['tiled', '0xa', 'left', 1, 'noop '],
+  ['tiled', '0xa', 'up', 1, 'noop '],
+  ['tiled', '0xd', 'right', 1, 'noop '],
+  ['tiled', '0xd', 'down', 1, 'noop '],
   // A window that only touches the source diagonally is not a neighbour.
-  ['diagonal', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['diagonal', '0xa', 'swap', 'down', SHOWN, 'noop '],
-  // Unsupported sources dispatch nothing at all.
-  ['floating', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['grouped', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['fullscreen', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['fullscreenclient', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['unmapped', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['hiddensource', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['gone', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['floating', '0xa', 'move', 'right', SHOWN, 'noop '],
-  ['grouped', '0xa', 'move', 'right', SHOWN, 'noop '],
-  ['fullscreen', '0xa', 'move', 'right', SHOWN, 'noop '],
-  ['gone', '0xa', 'move', 'right', SHOWN, 'noop '],
+  ['diagonal', '0xa', 'right', 1, 'noop '],
+  ['diagonal', '0xa', 'down', 1, 'noop '],
+  // A swap rearranges a tiling, so unsupported sources dispatch nothing.
+  ['floating', '0xa', 'right', 1, 'noop '],
+  ['grouped', '0xa', 'right', 1, 'noop '],
+  ['fullscreen', '0xa', 'right', 1, 'noop '],
+  ['fullscreenclient', '0xa', 'right', 1, 'noop '],
+  ['unmapped', '0xa', 'right', 1, 'noop '],
+  ['hiddensource', '0xa', 'right', 1, 'noop '],
+  ['gone', '0xa', 'right', 1, 'noop '],
   // Unsupported and off-monitor candidates are skipped, not swapped with.
-  ['candidates', '0xa', 'swap', 'right', SHOWN, swapped('0xa', '0xf')],
+  ['candidates', '0xa', 'right', 1, swapped('0xa', '0xf')],
   // Ties: perpendicular distance first, then the address.
-  ['ties', '0xa', 'swap', 'right', SHOWN, swapped('0xa', '0xc')],
-  ['duplicates', '0xa', 'swap', 'right', SHOWN, swapped('0xa', '0xb')],
-  // Moves walk the shown list, 1 -> 3 -> 7 and back, and stop at its ends.
-  ['tiled', '0xa', 'move', 'right', SHOWN, moved('0xa', 3)],
-  ['tiled', '0xe', 'move', 'right', SHOWN, moved('0xe', 7)],
-  ['tiled', '0xf', 'move', 'right', SHOWN, 'noop '],
-  ['tiled', '0xf', 'move', 'left', SHOWN, moved('0xf', 3)],
-  ['tiled', '0xe', 'move', 'left', SHOWN, moved('0xe', 1)],
-  ['tiled', '0xa', 'move', 'left', SHOWN, 'noop '],
-  // A destination Stage lists but the compositor does not have is not
-  // created, and one on another monitor is refused.
-  ['missing', '0xa', 'move', 'right', SHOWN, 'noop '],
-  ['foreignmonitor', '0xa', 'move', 'right', SHOWN, 'noop '],
-  // The window has moved since Stage drew it: its workspace is not shown.
-  ['stale', '0xa', 'swap', 'right', SHOWN, 'noop '],
-  ['stale', '0xa', 'move', 'right', SHOWN, 'noop '],
+  ['ties', '0xa', 'right', 1, swapped('0xa', '0xc')],
+  ['duplicates', '0xa', 'right', 1, swapped('0xa', '0xb')],
+  // The window has moved since Stage drew it on workspace 1.
+  ['stale', '0xa', 'right', 1, 'noop '],
 ];
 
-for (const [world, source, action, direction, shown, expected] of scenarios) {
-  const lua = L.editLua(source, action, direction, shown);
-  assert.notEqual(lua, '', 'a chunk for ' + [world, source, action, direction]);
+for (const [world, source, direction, workspace, expected] of scenarios) {
+  const lua = L.swapLua(source, direction, workspace);
+  assert.notEqual(lua, '', 'a chunk for ' + [world, source, direction]);
   let out;
   try {
-    out = execFileSync('lua', [path.join(__dirname, 'edit.lua'), world],
+    out = execFileSync('lua', [path.join(__dirname, 'chunk.lua'), world],
                        { input: lua, encoding: 'utf8' });
   } catch (err) {
-    throw new Error('lua failed for ' + [world, source, action, direction].join(' ')
+    throw new Error('lua failed for ' + [world, source, direction].join(' ')
                     + ': ' + (err.stderr || err.message));
   }
-  assert.equal(out.trim(), expected.trim(),
-               [world, source, action, direction].join(' '));
+  assert.equal(out.trim(), expected.trim(), [world, source, direction].join(' '));
 }
 
-console.log('keyboard: key routing, chunk generation, and ' + scenarios.length
-            + ' Lua scenarios against a mocked compositor');
+console.log('keyboard: key routing, move destinations, and ' + scenarios.length
+            + ' Lua swap scenarios against a mocked compositor');

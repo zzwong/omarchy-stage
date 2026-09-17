@@ -58,12 +58,7 @@ assert.equal(everyAssignment, 2,
 // process per click for a reply Quickshell already logs.
 assert.ok(!/execDetached/.test(qml), 'no fire-and-forget dispatch in Stage.qml');
 assert.ok(/Hyprland\.dispatch\(/.test(qml), 'Hyprland.dispatch is used');
-// The one exception is the keyboard edit runner: an edit has to know when the
-// compositor has answered, and `hyprctl dispatch` replies only once it has.
-const hyprctlChildren = qml.match(/"hyprctl",\s*"dispatch"/g) || [];
-assert.equal(hyprctlChildren.length, 1, 'only the edit runner forks hyprctl');
-assert.ok(/editRunner\.exec\(\["hyprctl",\s*"dispatch"/.test(qml),
-          'the hyprctl child is the edit runner');
+assert.ok(!/"hyprctl"/.test(qml), 'nothing forks a hyprctl child');
 
 // Every Repeater over windows binds the ObjectModel, not a JS array: an array
 // is a new model on every membership change *and* on every re-tile (sortPanes
@@ -98,16 +93,13 @@ assert.equal(disarmers, 2,
              'only disarmCycle() and the watchdog clear `cycled`, got ' + disarmers);
 
 // Key routing is one pure decision in StageLogic, not a chain of key
-// comparisons in the handler: a stray `else if` there is how a modified key
-// reaches navigation.
-const navigate = functionBody(qml, 'navigate');
-assert.ok(/StageLogic\.routeKey\(/.test(navigate), 'navigate() calls routeKey');
-assert.ok(!/Qt\.Key_/.test(navigate),
-          'navigate() compares no keys of its own');
-
-// Edits are dispatched Lua, not a helper process.
-assert.ok(!/python/i.test(qml), 'no python helper');
-assert.ok(/StageLogic\.editLua\(/.test(qml), 'edits go through editLua');
+// comparisons in a handler: a stray `else if` in one is how a modified key
+// reaches navigation, or how a release commits a step nobody took. Presses
+// and releases both go through routeKey, so no key name belongs in the QML
+// at all.
+assert.ok(/StageLogic\.routeKey\(/.test(functionBody(qml, 'handleKey')),
+          'the key catcher asks routeKey what a key means');
+assert.ok(!/Qt\.Key_/.test(qml), 'Stage.qml compares no keys of its own');
 
 // The shared logic lives in one importable module.
 assert.ok(/import "StageLogic\.js" as StageLogic/.test(qml), 'StageLogic.js is imported');

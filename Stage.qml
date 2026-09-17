@@ -207,9 +207,19 @@ Item {
   // workspace later would silently re-enter pane mode on an address the user
   // last chose several workspaces ago -- or, after a close handed the
   // selection on, on a window they never chose at all.
-  function selectWorkspace(index) {
+  //
+  // `keepPane` is the one exception, and it is an address rather than a flag:
+  // Stage sending a window to another workspace takes the pane zoom with it,
+  // because the user is still looking at the same window. The address is
+  // re-scoped after the index is assigned, so the zoom belongs to the
+  // workspace the window is on its way to.
+  function selectWorkspace(index, keepPane) {
     if (index !== root.selectedIndex) root.selectPane(-1)
     root.selectedIndex = index
+    if (keepPane) {
+      root.paneWorkspaceId = root.selectedWorkspaceId
+      root.selectedPaneAddress = keepPane
+    }
   }
 
   // Pane mode: a third zoom level inside the carousel's expanded preview.
@@ -298,9 +308,8 @@ Item {
   }
 
   // The workspace ids Stage is showing, in the order it shows them: the
-  // focused monitor's, which is not the compositor's whole list. The "+"
-  // card's caption and the workspace a drop on it creates both count from
-  // this one list.
+  // focused monitor's, which is not the compositor's whole list. What the
+  // "+" slot's id is computed from, and the row a keyboard move walks.
   readonly property var shownIds:
     workspaceList.map(function(w) { return w.id })
 
@@ -819,54 +828,48 @@ Item {
 
   // --- Keyboard editing ------------------------------------------------
   // Shift+arrow swaps the selected pane with a tiled neighbour; Ctrl+Shift+
-  // ←/→ sends it to the workspace next to this one in the list Stage is
-  // showing. Both are a single Lua chunk: Hyprland resolves the source,
-  // picks the neighbour or destination and dispatches, all in one call, so
-  // no decision is made against geometry that has already changed. Nothing
-  // here polls, and there is no helper to time out — `editBusy` lasts
-  // exactly as long as the dispatch the compositor is answering.
-  property bool editBusy: false
+  // ←/→ sends it to the workspace next to this one in the row Stage is
+  // showing. Each is one dispatched Lua chunk — the swap's own, and the same
+  // move chunk a dragged thumbnail uses — so no decision is made against
+  // geometry that has already changed, and nothing has to wait for a reply:
+  // Hyprland answers requests on one socket in order, and dispatch() restarts
+  // the geometry refresh behind each one. A swap inside one workspace emits
+  // no Hyprland event at all (verified against 0.56.2), which is exactly why
+  // that refresh is there.
 
-  // Edits run their own process rather than the shared dispatcher: this is
-  // the one action that has to know when the compositor is done, and
-  // `hyprctl dispatch` replies only once it is. There is never more than one
-  // in flight — routeKey drops keys while editBusy — so there is nothing to
-  // queue. The chunk's "swap"/"move"/"noop" tag does not come back here:
-  // hyprctl answers "ok" whatever the Lua closure returns (verified against
-  // 0.56.2), so a no-op is indistinguishable from a swap at this end.
-  Process {
-    id: editRunner
-    stdout: StdioCollector { id: editOut }
-    stderr: StdioCollector { id: editErr }
-    onExited: function(exitCode) {
-      root.editBusy = false
-      if (exitCode !== 0)
-        console.warn("Stage: keyboard edit failed (exit " + exitCode + "): "
-                     + (String(editErr.text).trim() || String(editOut.text).trim()))
-      // A move announces itself (movewindowv2) but a swap inside one
-      // workspace emits no event at all — verified against 0.56.2 — so the
-      // previews would keep the pre-swap rectangles. The reply means the
-      // dispatcher has already run and the layout is final; this is the same
-      // single-shot refresh the compositor's own events use, so an edit that
-      // did both coalesces into one round trip.
-      geometryRefresh.restart()
-    }
+  function swapPane(direction) {
+    root.dispatch(StageLogic.swapLua(root.paneAddress, direction,
+                                     root.paneWorkspaceId))
+  }
+
+  // Stage knows where it is sending the window, so it takes the selection
+  // there itself rather than waiting to notice the window arrive. Quickshell
+  // removes a moved toplevel from its old workspace before adding it to the
+  // new one, and a workspace the move empties is destroyed in the same burst:
+  // a selection that has to be inferred from that is a selection that lands
+  // on a sibling. This one is decided before the request goes out.
+  function movePane(direction) {
+    var to = StageLogic.moveDestinationIndex(
+      root.shownIds, root.selectedWorkspaceId, direction === "left")
+    if (to < 0) return // the end of the row; nothing is created
+    var address = root.paneAddress
+    // The chunk refuses a grouped window in the compositor. Refusing it here
+    // too is what keeps the selection from travelling to a workspace the
+    // window is never going to arrive on.
+    var pane = root.selectedPanes[root.paneIndex]
+    if (!pane || StageLogic.isGrouped(pane.lastIpcObject)) return
+    var lua = StageLogic.moveLua(address, root.workspaceList[to].id)
+    if (!lua) return
+    root.dispatch(lua)
+    root.selectWorkspace(to, address)
   }
 
   function editPane(action, direction) {
-    root.cycled = false // an edit is not a step; releasing Super must not commit
-    holdWatchdog.stop()
+    root.disarmCycle() // an edit is not a step; releasing Super must not commit
     root.kbdPriority = true
-    if (root.editBusy) return
-    var shown = []
-    for (var i = 0; i < root.workspaceList.length; i++) {
-      var ws = root.workspaceList[i]
-      if (ws && ws.id > 0) shown.push(ws.id)
-    }
-    var lua = StageLogic.editLua(root.paneAddress, action, direction, shown)
-    if (!lua) return
-    root.editBusy = true
-    editRunner.exec(["hyprctl", "dispatch", lua])
+    if (!root.paneAddress) return
+    if (action === "move") root.movePane(direction)
+    else root.swapPane(direction)
   }
 
   // Skewed workspace slab: the one visual unit shared by the carousel, the
@@ -1255,42 +1258,38 @@ Item {
         // the compositor keeps its own Super chords — so the interval
         // above carries most of the weight.
         if (root.cycled) holdWatchdog.restart()
-        keyCatcher.navigate(event)
+        keyCatcher.handleKey(event, "press")
       }
 
-      // Only the modifier's release is ever delivered — its press precedes
-      // the grab — as Key_Meta or Key_Super_L. Super only: a step carries no
-      // modifier state, so any other would commit on one never cycled with.
-      Keys.onReleased: function(event) {
-        if (event.isAutoRepeat) return
-        if (root.keybindMode !== "cycle" || !root.cycled) return
-        if (event.key !== Qt.Key_Meta && event.key !== Qt.Key_Super_L
-            && event.key !== Qt.Key_Super_R) return
-        root.disarmCycle()
-        root.activateCurrent()
-        event.accepted = true
-      }
+      // Only the modifier's release is ever delivered: its press precedes the
+      // grab. Which release means "commit the step" is routeKey's call like
+      // every other key's, so nothing here compares a key of its own.
+      Keys.onReleased: function(event) { keyCatcher.handleKey(event, "release") }
 
-      // What a key press means is a decision with no compositor in it:
-      // StageLogic.routeKey makes it — exact modifiers, the keypad flag
-      // masked off, edits only in pane mode, nothing unrecognised falling
-      // through to navigation — and this carries it out. Anything but
+      // What a key event means is a decision with no compositor in it:
+      // StageLogic.routeKey makes it — exact modifiers, the keypad and Super
+      // flags masked off, edits only in pane mode, nothing unrecognised
+      // falling through to navigation — and this carries it out. Anything but
       // "none" is an accepted event.
-      function navigate(event) {
+      function handleKey(event, type) {
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
 
         var command = StageLogic.routeKey(
-          { key: event.key, modifiers: event.modifiers,
+          { type: type, key: event.key, modifiers: event.modifiers,
             isAutoRepeat: event.isAutoRepeat },
-          { panes: panes, editBusy: root.editBusy,
-            dragPending: root.dragging })
+          { panes: panes, dragPending: root.dragging,
+            armed: root.keybindMode === "cycle" && root.cycled })
         if (command.action === "none") return
         event.accepted = true
 
         switch (command.action) {
         case "consume": // a chord Stage does not implement, swallowed
+          break
+        case "commit": // the modifier released after a cycle step
+          root.disarmCycle()
+          root.activateCurrent()
           break
         case "dismiss":
           root.dismiss()

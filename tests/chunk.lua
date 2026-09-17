@@ -54,8 +54,52 @@ local WORLDS = {
   tiled = { windows = tiled(), existing = { 1, 3, 7 } },
 
   grouped = { windows = alone{ group = { "0xb" } }, existing = { 1, 3, 7 } },
+  -- Not tiled. A swap rearranges a tiling and refuses all three; the move
+  -- chunk never looks at any of these fields, so it moves them.
+  floating = { windows = alone{ floating = true }, existing = { 1, 3, 7 } },
+  fullscreen = { windows = alone{ fullscreen = 2 }, existing = { 1, 3, 7 } },
+  fullscreenclient = { windows = alone{ fullscreen_client = 1 }, existing = { 1, 3, 7 } },
   unmapped = { windows = alone{ mapped = false }, existing = { 1, 3, 7 } },
   hiddensource = { windows = alone{ hidden = true }, existing = { 1, 3, 7 } },
+
+  -- Nothing shares a span with the source on either axis.
+  diagonal = { windows = {
+    win{ address = "0xa", x = 0,   y = 0,   w = 400, h = 300 },
+    win{ address = "0xb", x = 500, y = 400, w = 400, h = 300 },
+  }, existing = { 1, 3, 7 } },
+
+  -- Unsupported and foreign candidates are skipped, not swapped with: to the
+  -- right of 0xa sit a floating, a grouped and a fullscreen window and one on
+  -- another monitor, then an ordinary window further out.
+  candidates = { windows = {
+    win{ address = "0xa", x = 0,    y = 0, w = 400, h = 500 },
+    win{ address = "0xb", x = 400,  y = 0, w = 400, h = 500, floating = true },
+    win{ address = "0xc", x = 800,  y = 0, w = 400, h = 500, group = { "0xa" } },
+    win{ address = "0xd", x = 1200, y = 0, w = 400, h = 500, fullscreen = 2 },
+    win{ address = "0xe", x = 1600, y = 0, w = 400, h = 500, mon = 2 },
+    win{ address = "0xf", x = 2000, y = 0, w = 400, h = 500 },
+  }, existing = { 1, 3, 7 } },
+
+  -- Two candidates at the same distance and the same perpendicular offset:
+  -- the lower address wins, so the choice never depends on enumeration order.
+  duplicates = { windows = {
+    win{ address = "0xa", x = 0,   y = 0, w = 400, h = 400 },
+    win{ address = "0xc", x = 400, y = 0, w = 400, h = 400 },
+    win{ address = "0xb", x = 400, y = 0, w = 400, h = 400 },
+  }, existing = { 1, 3, 7 } },
+
+  -- Two equally distant candidates: the nearer perpendicular centre wins.
+  ties = { windows = {
+    win{ address = "0xa", x = 0,   y = 200, w = 400, h = 400 },
+    win{ address = "0xb", x = 400, y = 0,   w = 400, h = 400 },
+    win{ address = "0xc", x = 400, y = 400, w = 400, h = 300 },
+  }, existing = { 1, 3, 7 } },
+
+  -- The window has moved since Stage drew it: it is not on the workspace the
+  -- chunk was built for.
+  stale = { windows = { win{ address = "0xa", x = 0, y = 0, w = 800, h = 500, ws = 5 },
+                        win{ address = "0xb", x = 800, y = 0, w = 800, h = 500, ws = 5 } },
+    existing = { 1, 3, 7 } },
 
   -- The destination exists but on another monitor.
   foreignmonitor = { windows = tiled(),
@@ -119,9 +163,17 @@ hl = {
     return nil
   end,
 
+  -- Where the pointer is, so a swap can put it back after Hyprland's own
+  -- warp. A fixed position is enough: the chunk only has to restore it.
+  get_cursor_pos = function() return { x = 640, y = 480 } end,
+
   dsp = {
     window = {
       move = function(args) return "move{" .. describe(args) .. "}" end,
+      swap = function(args) return "swap{" .. describe(args) .. "}" end,
+    },
+    cursor = {
+      move = function(args) return "cursor{" .. describe(args) .. "}" end,
     },
   },
 
