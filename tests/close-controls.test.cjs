@@ -31,4 +31,28 @@ assert.deepEqual(requests, ['a']);
 root.closeKeyHeld = false; press(1); assert.deepEqual(requests, ['a']);
 root.closeKeyHeld = false; input.panes = false; press(); assert.deepEqual(requests, ['a']);
 root.closeKeyHeld = false; input.panes = true; press(); assert.deepEqual(requests, ['a', 'b']);
-console.log('Close helpers and mocked actual QML key branch passed');
+// Execute the actual QML compositor-event filter that drives the geometry
+// refresh, with mocked events and timer.
+const evAt = qml.indexOf('function onRawEvent(event) {');
+const evBody = qml.slice(qml.indexOf('{', evAt) + 1, qml.indexOf('\n    }', evAt));
+const listAt = qml.indexOf('readonly property var refreshEvents:');
+const listSrc = qml.slice(qml.indexOf('[', listAt), qml.indexOf(']', listAt) + 1);
+let restarts = 0;
+const ev = vm.createContext({
+  root: { opened: true, refreshEvents: [] },
+  geometryRefresh: { restart() { restarts++; } },
+});
+vm.runInContext('root.refreshEvents = ' + listSrc
+  + '; function raw(event) {' + evBody + '}', ev);
+ev.raw({ name: 'closewindow', data: '1a2b3c' });
+assert.equal(restarts, 1, 'a close refreshes geometry');
+ev.raw({ name: 'movewindowv2', data: '1a2b3c,2,2' });
+assert.equal(restarts, 2, 'a re-tile refreshes geometry');
+ev.raw({ name: 'windowtitle', data: '1a2b3c' });
+assert.equal(restarts, 2, 'title-only events do not cost an IPC round trip');
+ev.root.opened = false;
+ev.raw({ name: 'closewindow', data: '1a2b3c' });
+assert.equal(restarts, 2, 'a hidden overlay never refreshes');
+// Reconciliation is event-driven; a polling timer would be a regression.
+assert.ok(!/repeat:\s*true/.test(qml), 'no repeating timer in Stage.qml');
+console.log('Close helpers, QML key branch and event filter passed');

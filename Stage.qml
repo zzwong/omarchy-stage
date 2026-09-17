@@ -187,34 +187,47 @@ Item {
 
   property var workspaceList: []
 
-  // Pane mode: a third zoom level inside the carousel's expanded preview.
-  // -1 = off; otherwise an index into selectedPanes.
-  property int paneIndex: -1
-  property string stablePaneAddress: ""
-  property bool reconcilingSelection: false
-  property int selectedWorkspaceId: -1
-  onPaneIndexChanged: {
-    if (!reconcilingSelection)
-      stablePaneAddress = paneIndex >= 0 && paneIndex < selectedPanes.length
-        ? String(selectedPanes[paneIndex].address) : ""
-  }
-  onSelectedIndexChanged: {
-    if (!reconcilingSelection) {
-      paneIndex = -1
-      selectedWorkspaceId = selectedIndex >= 0 && selectedIndex < workspaceList.length
-        ? workspaceList[selectedIndex].id : -1
-    }
-  }
-  onSelectedPanesChanged: Qt.callLater(root.reconcilePanes)
+  // Workspace selection is owned by the workspace's id; selectedIndex is
+  // only where that workspace currently sits in the list, which the
+  // compositor may change under us.
+  readonly property int selectedWorkspaceId:
+    (selectedIndex >= 0 && selectedIndex < workspaceList.length
+     && workspaceList[selectedIndex]) ? workspaceList[selectedIndex].id : -1
 
-  function reconcilePanes() {
-    var addresses = selectedPanes.map(function(p) { return String(p.address) })
-    reconcilingSelection = true
-    paneIndex = CloseLogic.neighbor(addresses, stablePaneAddress, paneIndex)
-    reconcilingSelection = false
-    stablePaneAddress = paneIndex >= 0 ? addresses[paneIndex] : ""
+  // Pane mode: a third zoom level inside the carousel's expanded preview.
+  // The selected window's address owns the selection and paneIndex is
+  // derived from it, scoped to the workspace the zoom was entered on. A
+  // re-tile, a reorder or a workspace rebuild therefore cannot move the
+  // selection onto a different window, and no reconciliation flag has to
+  // guard the property writes a rebuild makes.
+  property string selectedPaneAddress: ""
+  property int paneWorkspaceId: -1
+  readonly property int paneIndex:
+    paneWorkspaceId !== selectedWorkspaceId ? -1
+    : selectedPanes.findIndex(function(p) {
+        return String(p.address) === root.selectedPaneAddress
+      })
+
+  // Every pane selection goes through here; -1 leaves pane mode.
+  function selectPane(index) {
+    root.paneWorkspaceId = root.selectedWorkspaceId
+    root.selectedPaneAddress = index >= 0 && index < root.selectedPanes.length
+      ? String(root.selectedPanes[index].address) : ""
   }
-  onViewModeChanged: paneIndex = -1
+
+  // When the selected window goes away — closed here, or moved off this
+  // workspace — hand pane mode to whatever took its place instead of
+  // dropping the user out a zoom level.
+  property int paneFallbackIndex: 0
+  onPaneIndexChanged: if (paneIndex >= 0) paneFallbackIndex = paneIndex
+  onSelectedPanesChanged: {
+    if (!root.selectedPaneAddress || root.paneIndex >= 0
+        || root.paneWorkspaceId !== root.selectedWorkspaceId) return
+    var addresses = root.selectedPanes.map(function(p) { return String(p.address) })
+    root.selectPane(CloseLogic.neighbor(addresses, root.selectedPaneAddress,
+                                        root.paneFallbackIndex))
+  }
+  onViewModeChanged: root.selectPane(-1)
 
   // Windows of the selected workspace in left-to-right, top-to-bottom order.
   readonly property var selectedPanes: {
@@ -235,7 +248,7 @@ Item {
   }
 
   readonly property string paneAddress:
-    paneIndex >= 0 ? stablePaneAddress : ""
+    paneIndex >= 0 ? root.selectedPaneAddress : ""
 
   // One slot per workspace plus the trailing "new workspace" slot.
   readonly property int slotCount: workspaceList.length + 1
@@ -248,13 +261,47 @@ Item {
     return max + 1
   }
 
-  readonly property var liveWorkspaces: Hyprland.workspaces.values
-  onLiveWorkspacesChanged: if (opened) Qt.callLater(function() { root.rebuildWorkspaces(true) })
+  // Membership changes arrive as a signal from the model itself; nothing
+  // polls for them.
+  Connections {
+    target: Hyprland.workspaces
+    function onValuesChanged() { if (root.opened) root.rebuildWorkspaces(true) }
+  }
+
+  // Window geometry lives in each toplevel's lastIpcObject, which only
+  // changes when something asks Hyprland for it — so after a window closes
+  // the survivors keep their pre-close rectangles and render letterboxed
+  // until the next refresh. Refresh on the compositor's own events instead,
+  // coalescing a burst into one round trip: that batches the IPC and lets
+  // the compositor finish re-tiling before the geometry is read.
+  readonly property var refreshEvents: [
+    "openwindow", "closewindow", "movewindow", "movewindowv2",
+    "changefloatingmode", "fullscreen", "createworkspace", "createworkspacev2",
+    "destroyworkspace", "destroyworkspacev2", "moveworkspace", "moveworkspacev2"]
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (root.opened && root.refreshEvents.indexOf(String(event.name)) >= 0)
+        geometryRefresh.restart()
+    }
+  }
+
+  // Single-shot: restarted per event, fires once after the burst settles.
+  Timer {
+    id: geometryRefresh
+    interval: 60
+    repeat: false
+    onTriggered: {
+      Hyprland.refreshToplevels()
+      Hyprland.refreshWorkspaces()
+    }
+  }
 
   function rebuildWorkspaces(preserve) {
-    var oldId = selectedWorkspaceId
-    var oldIndex = selectedIndex
-    var wasPlus = oldId === -1 && selectedIndex >= 0
+    var oldId = root.selectedWorkspaceId
+    var oldIndex = root.selectedIndex
+    var wasPlus = root.plusSelected
     var out = []
     var values = Hyprland.workspaces.values
     for (var i = 0; i < values.length; i++) {
@@ -264,30 +311,30 @@ Item {
       out.push(ws)
     }
     out.sort(function(a, b) { return a.id - b.id })
-    if (preserve) {
-      root.reconcilingSelection = true
-      root.workspaceList = out
-      var idx = out.findIndex(function(w) { return w.id === oldId })
-      root.selectedIndex = wasPlus ? out.length
-        : idx >= 0 ? idx : out.length ? Math.min(Math.max(0, oldIndex), out.length - 1) : -1
-      root.selectedWorkspaceId = root.selectedIndex >= 0 && root.selectedIndex < out.length
-        ? out[root.selectedIndex].id : -1
-      if (root.selectedWorkspaceId !== oldId) {
-        root.paneIndex = -1
-        root.stablePaneAddress = ""
-      }
-      root.reconcilingSelection = false
-      root.reconcilePanes()
-      return
-    }
-    root.workspaceList = out
 
-    root.selectedIndex = out.length > 0 ? 0 : -1
-    for (var j = 0; j < out.length; j++) {
-      if (Hyprland.focusedWorkspace && out[j].id === Hyprland.focusedWorkspace.id)
-        root.selectedIndex = j
+    // Only a real membership change may replace the model: reassigning an
+    // equal list recreates every delegate, and with it every live capture.
+    var changed = out.length !== root.workspaceList.length
+    for (var k = 0; !changed && k < out.length; k++)
+      changed = out[k] !== root.workspaceList[k]
+    if (changed) root.workspaceList = out
+
+    // Exactly one assignment: an intermediate value would notify a
+    // selection nobody asked for.
+    var index
+    if (!preserve) {
+      index = out.length > 0 ? 0 : -1
+      for (var j = 0; j < out.length; j++)
+        if (Hyprland.focusedWorkspace && out[j].id === Hyprland.focusedWorkspace.id)
+          index = j
+    } else if (wasPlus) {
+      index = out.length // the "+" slot keeps its place at the end
+    } else {
+      var found = out.findIndex(function(w) { return w.id === oldId })
+      index = found >= 0 ? found
+        : out.length > 0 ? Math.min(Math.max(0, oldIndex), out.length - 1) : -1
     }
-    root.selectedWorkspaceId = root.selectedIndex >= 0 ? out[root.selectedIndex].id : -1
+    root.selectedIndex = index
   }
 
   // --- Hold-to-cycle ("cycle" keybindMode) -----------------------------
@@ -328,11 +375,12 @@ Item {
     settingsProbe.running = true
     root.kbdPriority = false
     root.cycled = false
+    root.closeKeyHeld = false // Esc while X was held must not eat the next X
     holdWatchdog.stop()
     // Reopening on the same workspace changes neither viewMode nor
     // selectedIndex, so nothing else clears a stale pane zoom.
-    root.paneIndex = -1
-    root.rebuildWorkspaces()
+    root.selectPane(-1)
+    root.rebuildWorkspaces(false)
     root.viewMode = root.viewPref === "grid" ? "grid" : "carousel"
     root.opened = true
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -341,7 +389,9 @@ Item {
   function close() {
     root.opened = false
     root.cycled = false
+    root.closeKeyHeld = false
     holdWatchdog.stop()
+    geometryRefresh.stop()
   }
 
   function dismiss() {
@@ -387,14 +437,24 @@ Item {
     height: 32
     radius: 8
     color: closeMouse.containsMouse ? root.selectedBorder : root.background
-    border.color: root.border
+    border.color: closeMouse.containsMouse ? root.selectedBorder : root.border
+    // The accent fill on hover can be lighter or darker than the menu
+    // background depending on the theme, and a foreground glyph on a light
+    // accent is unreadable. Pick whichever theme token contrasts more with
+    // the fill actually painted.
+    readonly property color glyphColor: {
+      function lum(c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b }
+      var fill = lum(closeControl.color)
+      return Math.abs(lum(root.foreground) - fill) >= Math.abs(lum(root.background) - fill)
+        ? root.foreground : root.background
+    }
     Accessible.role: Accessible.Button
     Accessible.name: "Close " + windowTitle
     Accessible.onPressAction: root.requestWindowClose(closeControl.address)
     Text {
       anchors.centerIn: parent
       text: "×"
-      color: root.foreground
+      color: closeControl.glyphColor
       font.pixelSize: 24
     }
     MouseArea {
@@ -440,8 +500,8 @@ Item {
   // One ←/→ step: panes when zoomed into them, else workspaces.
   function advance(delta) {
     if (root.paneIndex >= 0 && root.selectedPanes.length > 0)
-      root.paneIndex = (root.paneIndex + delta + root.selectedPanes.length)
-                       % root.selectedPanes.length
+      root.selectPane((root.paneIndex + delta + root.selectedPanes.length)
+                      % root.selectedPanes.length)
     else root.selectAdjacent(delta)
   }
 
@@ -601,11 +661,58 @@ Item {
               enabled: slab.selected
               onClicked: slab.windowActivated(thumb.topl.address)
             }
+
+            // The slab masks its content to a skewed parallelogram and
+            // wsContent overscans that mask, so a control anchored to the
+            // thumbnail's own top-right corner is cut for every window that
+            // touches the slab's top or right edge. Anchor it to the visible
+            // intersection instead: the same corner wherever that corner is
+            // fully visible, pushed in by the overscan fringe and the skew
+            // allowance where it is not.
+            readonly property real closeSize: 32 // matches CloseControl
+            readonly property real closePad: 8
+            // Thumb-local -> slab coordinates; pane zoom scales the
+            // thumbnail about its own centre.
+            function toSlabX(px) {
+              return wsContent.x + thumb.x + thumb.width / 2
+                     + (px - thumb.width / 2) * thumb.scale
+            }
+            function toSlabY(py) {
+              return wsContent.y + thumb.y + thumb.height / 2
+                     + (py - thumb.height / 2) * thumb.scale
+            }
+            function fromSlabX(sx) {
+              return (sx - wsContent.x - thumb.x - thumb.width / 2) / thumb.scale
+                     + thumb.width / 2
+            }
+            function fromSlabY(sy) {
+              return (sy - wsContent.y - thumb.y - thumb.height / 2) / thumb.scale
+                     + thumb.height / 2
+            }
+            readonly property real closeY: Math.min(
+              Math.max(thumb.closePad, thumb.fromSlabY(thumb.closePad)),
+              Math.max(0, thumb.height - thumb.closeSize - thumb.closePad))
+            readonly property real closeX: {
+              var h = Math.max(1, slab.height)
+              // The mask's right edge recedes with the shear, so the
+              // control's lower-right corner is the binding one.
+              var lowY = Math.max(0, thumb.toSlabY(thumb.closeY + thumb.closeSize))
+              var rightAt = slab.width - slab.skew * lowY / h - thumb.closePad
+              var highY = Math.max(0, thumb.toSlabY(thumb.closeY))
+              var leftAt = slab.skew * (1 - highY / h) + thumb.closePad
+              var px = Math.min(thumb.width - thumb.closePad - thumb.closeSize,
+                                thumb.fromSlabX(rightAt) - thumb.closeSize)
+              return Math.max(px, thumb.fromSlabX(leftAt))
+            }
+
             CloseControl {
-              anchors.right: parent.right
-              anchors.top: parent.top
-              anchors.margins: 8
+              x: thumb.closeX
+              y: thumb.closeY
+              // Hidden rather than half-visible if even the clamped control
+              // would not fit inside the thumbnail.
               visible: slab.selected && thumb.width >= 64 && thumb.height >= 64
+                       && thumb.closeX >= 0
+                       && thumb.closeY + thumb.closeSize <= thumb.height
                        && (thumbHover.hovered || thumb.paneSelected)
               address: String(thumb.topl.address)
               windowTitle: String(thumb.topl.title || "window")
@@ -803,7 +910,7 @@ Item {
         } else if (event.key === Qt.Key_Up) {
           root.kbdPriority = true
           if (panes) {
-            root.paneIndex = -1
+            root.selectPane(-1)
           } else if (grid) {
             // Move up a row; past the top, fall back into the carousel
             // (unless locked to the grid).
@@ -824,7 +931,7 @@ Item {
             else if (root.viewPref === "auto") root.viewMode = "carousel"
           } else if (caro && root.paneIndex < 0 && root.selectedPanes.length > 0) {
             // Zoom one more level: into the panes of the expanded preview.
-            root.paneIndex = 0
+            root.selectPane(0)
           }
           event.accepted = true
         } else if (event.key === Qt.Key_Left
@@ -1358,11 +1465,24 @@ Item {
                     anchors.fill: parent
                     onClicked: root.focusWindow(thumb.topl.address)
                   }
+
+                  // The card clips its content, so a window hanging over the
+                  // monitor edge would lose the control; keep it inside.
+                  readonly property real closeSize: 32 // matches CloseControl
+                  readonly property real closePad: 8
+                  readonly property real closeX: Math.max(0, Math.min(
+                    thumb.width - thumb.closePad - thumb.closeSize,
+                    card.width - thumb.closePad - thumb.closeSize - thumb.x))
+                  readonly property real closeY: Math.min(
+                    Math.max(thumb.closePad, thumb.closePad - thumb.y),
+                    Math.max(0, thumb.height - thumb.closeSize - thumb.closePad))
+
                   CloseControl {
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 8
-                    visible: thumb.width >= 64 && thumb.height >= 64 && cardThumbHover.hovered
+                    x: thumb.closeX
+                    y: thumb.closeY
+                    visible: thumb.width >= 64 && thumb.height >= 64
+                             && thumb.closeY + thumb.closeSize <= thumb.height
+                             && cardThumbHover.hovered
                     address: String(thumb.topl.address)
                     windowTitle: String(thumb.topl.title || "window")
                   }

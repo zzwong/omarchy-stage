@@ -85,13 +85,18 @@ pills also have an always-visible `×` as a fallback for tiny previews. Cards
 expose hover controls on individual previews, but have no pane mode or title
 pill fallback. Thumbnails smaller than 64px in either dimension omit the
 control rather than covering ordinary click targets; use picker pills for
-those windows. This change adds no movement or dragging controls.
+those windows. The control sits inside the visible part of its preview, so
+the workspace slab's skewed mask never clips it, and it takes a contrasting
+glyph on hover. This change adds no movement or dragging controls.
 
 Closing sends Hyprland's normal close request, **never kill**. Stage stays
 open and previews disappear only when the compositor removes the window.
 Selection tracks the same window across geometry changes; when it actually
 closes, the next pane (or previous at the end) is selected. Empty workspaces
-leave pane mode. Duplicate requests to the same address are suppressed for
+leave pane mode. The surviving previews pick up the compositor's new tiling
+while Stage stays open: Stage refreshes window geometry on the compositor's
+own events, batching a burst into one refresh, so nothing has to be reopened
+to look right. Duplicate requests to the same address are suppressed for
 two seconds; after that you can retry if the application declines. Unsaved-work
 dialogs may require focusing the application to answer them. Closing disarms
 hold-to-cycle's release-to-focus action.
@@ -99,8 +104,7 @@ hold-to-cycle's release-to-focus action.
 #### Close-controls QA
 
 Automated: `node tests/close-controls.test.cjs`, plus the lint workflow commands.
-Manual checklist (requires an isolated compositor or disposable windows; not
-performed as part of the draft implementation):
+Manual checklist (requires an isolated compositor or disposable windows):
 
 - In carousel, grid, and cards, hover a preview and click `×`: Stage stays
   open; clicking elsewhere still focuses normally. Check small previews and
