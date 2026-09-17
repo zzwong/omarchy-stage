@@ -190,9 +190,27 @@ Item {
   // Workspace selection is owned by the workspace's id; selectedIndex is
   // only where that workspace currently sits in the list, which the
   // compositor may change under us.
+  //
+  // Everything about the selection derives from this one property rather
+  // than from (workspaceList, selectedIndex) separately. A rebuild assigns
+  // those two in sequence, and QML re-evaluates the bindings that depend on
+  // them in an order of its own choosing; with a single common source, every
+  // derived value read from within a handler belongs to the same workspace.
+  readonly property var selectedWorkspace:
+    (selectedIndex >= 0 && selectedIndex < workspaceList.length)
+      ? workspaceList[selectedIndex] : null
   readonly property int selectedWorkspaceId:
-    (selectedIndex >= 0 && selectedIndex < workspaceList.length
-     && workspaceList[selectedIndex]) ? workspaceList[selectedIndex].id : -1
+    selectedWorkspace ? selectedWorkspace.id : -1
+
+  // Every workspace selection made by input goes through here: leaving a
+  // workspace leaves its pane zoom behind. Without this, returning to a
+  // workspace later would silently re-enter pane mode on an address the user
+  // last chose several workspaces ago -- or, after a close handed the
+  // selection on, on a window they never chose at all.
+  function selectWorkspace(index) {
+    if (index !== root.selectedIndex) root.selectPane(-1)
+    root.selectedIndex = index
+  }
 
   // Pane mode: a third zoom level inside the carousel's expanded preview.
   // The selected window's address owns the selection and paneIndex is
@@ -203,12 +221,12 @@ Item {
   property string selectedPaneAddress: ""
   property int paneWorkspaceId: -1
   readonly property int paneIndex:
-    paneWorkspaceId !== selectedWorkspaceId ? -1
-    : StageLogic.paneIndexFor(selectedPanes, selectedPaneAddress)
+    (selectedWorkspace && selectedWorkspace.id === paneWorkspaceId)
+      ? StageLogic.paneIndexFor(selectedPanes, selectedPaneAddress) : -1
 
   // Every pane selection goes through here; -1 leaves pane mode.
   function selectPane(index) {
-    root.paneWorkspaceId = root.selectedWorkspaceId
+    root.paneWorkspaceId = root.selectedWorkspace ? root.selectedWorkspace.id : -1
     root.selectedPaneAddress = index >= 0 && index < root.selectedPanes.length
       ? String(root.selectedPanes[index].address) : ""
   }
@@ -219,21 +237,22 @@ Item {
   property int paneFallbackIndex: 0
   onPaneIndexChanged: if (paneIndex >= 0) paneFallbackIndex = paneIndex
   onSelectedPanesChanged: {
-    if (!root.selectedPaneAddress || root.paneIndex >= 0
-        || root.paneWorkspaceId !== root.selectedWorkspaceId) return
+    // Scope and membership are both read off `selectedWorkspace`, which
+    // `selectedPanes` was just derived from, so this can never hand pane mode
+    // to a window on a workspace that is only half-selected.
+    var ws = root.selectedWorkspace
+    var addr = root.selectedPaneAddress
+    if (!addr || !ws || ws.id !== root.paneWorkspaceId) return
     var addresses = root.selectedPanes.map(function(p) { return String(p.address) })
+    if (addresses.indexOf(addr) >= 0) return // still there, only re-tiled
     root.selectPane(StageLogic.neighborAfterClose(
-      addresses, root.selectedPaneAddress, root.paneFallbackIndex))
+      addresses, addr, root.paneFallbackIndex))
   }
   onViewModeChanged: root.selectPane(-1)
 
   // Windows of the selected workspace in left-to-right, top-to-bottom order.
-  readonly property var selectedPanes: {
-    if (selectedIndex < 0 || selectedIndex >= workspaceList.length) return []
-    var workspace = workspaceList[selectedIndex]
-    if (!workspace) return []
-    return StageLogic.sortPanes(workspace.toplevels.values)
-  }
+  readonly property var selectedPanes:
+    selectedWorkspace ? StageLogic.sortPanes(selectedWorkspace.toplevels.values) : []
 
   readonly property string paneAddress:
     paneIndex >= 0 ? root.selectedPaneAddress : ""
@@ -298,14 +317,13 @@ Item {
     }
     out.sort(function(a, b) { return a.id - b.id })
 
-    // Only a real membership change may replace the model: reassigning an
-    // equal list recreates every delegate, and with it every live capture.
-    if (StageLogic.membershipChanged(root.workspaceList, out))
-      root.workspaceList = out
-
-    // Exactly one assignment: an intermediate value would notify a
-    // selection nobody asked for.
-    root.selectedIndex = StageLogic.reconcileSelection({
+    // Resolve the new index against the rebuilt list before touching either
+    // property. `workspaceList` and `selectedIndex` cannot be assigned
+    // atomically, so between them `selectedWorkspace` is briefly a workspace
+    // nobody selected; dropping a pane zoom the reconciliation moved off its
+    // workspace up front makes that intermediate inert, because pane mode is
+    // scoped by workspace id and the address is already gone.
+    var index = StageLogic.reconcileSelection({
       ids: out.map(function(w) { return w.id }),
       oldId: oldId,
       oldIndex: oldIndex,
@@ -313,6 +331,17 @@ Item {
       focusedId: Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : -1,
       preserve: preserve === true
     })
+    var newId = (index >= 0 && index < out.length) ? out[index].id : -1
+    if (newId !== oldId) root.selectPane(-1)
+
+    // Only a real membership change may replace the model: reassigning an
+    // equal list recreates every delegate, and with it every live capture.
+    if (StageLogic.membershipChanged(root.workspaceList, out))
+      root.workspaceList = out
+
+    // Exactly one assignment: an intermediate value would notify a
+    // selection nobody asked for.
+    root.selectedIndex = index
   }
 
   // --- Hold-to-cycle ("cycle" keybindMode) -----------------------------
@@ -481,7 +510,7 @@ Item {
 
   function selectAdjacent(delta) {
     if (root.slotCount === 0) return
-    root.selectedIndex = (root.selectedIndex + delta + root.slotCount) % root.slotCount
+    root.selectWorkspace((root.selectedIndex + delta + root.slotCount) % root.slotCount)
   }
 
   function activateSelected() {
@@ -883,7 +912,7 @@ Item {
             // Move up a row; past the top, fall back into the carousel
             // (unless locked to the grid).
             var up = root.selectedIndex - root.gridCols
-            if (up >= 0) root.selectedIndex = up
+            if (up >= 0) root.selectWorkspace(up)
             else if (root.viewPref === "auto") root.viewMode = "carousel"
           } else if (root.uiStyle === "picker" && root.viewPref === "auto") {
             root.viewMode = "grid"
@@ -895,7 +924,7 @@ Item {
             // Move down a row; past the bottom, fall back into the carousel
             // (unless locked to the grid).
             var down = root.selectedIndex + root.gridCols
-            if (down < root.slotCount) root.selectedIndex = down
+            if (down < root.slotCount) root.selectWorkspace(down)
             else if (root.viewPref === "auto") root.viewMode = "carousel"
           } else if (caro && root.paneIndex < 0 && root.selectedPanes.length > 0) {
             // Zoom one more level: into the panes of the expanded preview.
@@ -1005,8 +1034,8 @@ Item {
             Behavior on width { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
             Behavior on height { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
 
-            onPressed: root.selectedIndex = index
-            onActivated: { root.selectedIndex = index; root.activateSelected() }
+            onPressed: root.selectWorkspace(index)
+            onActivated: { root.selectWorkspace(index); root.activateSelected() }
             onWindowActivated: function(address) { root.focusWindow(address) }
           }
         }
@@ -1051,8 +1080,8 @@ Item {
               z: selected ? 2 : 1
               Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
-              onPressed: root.selectedIndex = index
-              onActivated: { root.selectedIndex = index; root.activateSelected() }
+              onPressed: root.selectWorkspace(index)
+              onActivated: { root.selectWorkspace(index); root.activateSelected() }
               onWindowActivated: function(address) { root.focusWindow(address) }
             }
           }
@@ -1373,7 +1402,7 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                onPositionChanged: if (!root.kbdPriority) root.selectedIndex = slot.index
+                onPositionChanged: if (!root.kbdPriority) root.selectWorkspace(slot.index)
                 onClicked: root.focusWorkspace(slot.workspace.id)
               }
 

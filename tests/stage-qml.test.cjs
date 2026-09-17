@@ -24,13 +24,24 @@ function functionBody(source, name) {
 // Reconciliation is event-driven; a polling timer would be a regression.
 assert.ok(!/repeat:\s*true/.test(qml), 'no repeating Timer in Stage.qml');
 
-// An intermediate value notifies a selection nobody asked for, and
-// onSelectedIndexChanged is a real observer: the rebuild assigns once.
+// An intermediate value notifies a selection nobody asked for, and the
+// derived pane/workspace bindings are real observers: the rebuild assigns once.
 const rebuild = functionBody(qml, 'rebuildWorkspaces');
 const assignments = rebuild.match(/selectedIndex\s*=[^=]/g) || [];
 assert.equal(assignments.length, 1,
              'rebuildWorkspaces assigns selectedIndex exactly once, got '
              + assignments.length);
+
+// Moving the selection off a workspace has to drop that workspace's pane
+// zoom, or coming back re-enters pane mode on a window the user is no longer
+// looking at. Every input path goes through selectWorkspace(), so the only
+// other assignment is the reconciliation above.
+assert.ok(/selectedIndex\s*=[^=]/.test(functionBody(qml, 'selectWorkspace')),
+          'selectWorkspace assigns selectedIndex');
+const everyAssignment = (qml.match(/selectedIndex\s*=[^=]/g) || []).length;
+assert.equal(everyAssignment, 2,
+             'only selectWorkspace and rebuildWorkspaces assign selectedIndex, got '
+             + everyAssignment);
 
 // Compositor actions go over Quickshell's own Hyprland socket. A detached
 // exec would fail silently, and a `hyprctl dispatch` child would fork a
