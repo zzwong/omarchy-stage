@@ -1133,10 +1133,6 @@ Item {
       anchors.horizontalCenter: parent.horizontalCenter
       spacing: Style.space(8)
 
-      // Same spatial (left-to-right) order as pane navigation and the
-      // thumbnails themselves.
-      readonly property var selectedToplevels: root.selectedPanes
-
       Rectangle {
         visible: root.plusSelected
         width: plusText.implicitWidth + Style.space(20)
@@ -1165,209 +1161,248 @@ Item {
       }
 
       Text {
-        visible: !root.plusSelected && labelBar.selectedToplevels.length === 0
+        visible: !root.plusSelected && root.selectedPanes.length === 0
         text: "Empty workspace"
         color: Util.alpha(root.pickerText, 0.6)
         font.pixelSize: Style.font.title
         font.weight: Font.DemiBold
       }
 
-      Repeater {
-        model: root.plusSelected ? [] : labelBar.selectedToplevels
+      // The pills bind the workspace's ObjectModel, like the thumbnails: an
+      // array is a new model on every membership change *and* on every
+      // re-tile, and rebuilding a pill re-runs its MPRIS and PipeWire lookups
+      // and reloads its album art. So this is not a Row — a Row lays its
+      // children out in creation order, and these have to sit in pane order.
+      // Each pill takes the x its place in `selectedPanes` earns it, and
+      // slides across when a swap reorders them.
+      Item {
+        id: pillRow
+        visible: !root.plusSelected && root.selectedPanes.length > 0
+        height: Style.space(30)
+        width: Math.max(0, pillRow.offsetOf(pills.count) - pillRow.gap)
+        readonly property real gap: labelBar.spacing
 
-        delegate: Rectangle {
-          id: pill
-          required property var modelData
-
-          readonly property var topl: modelData
-          // The × sits on top of the pill and takes the hover with it, so the
-          // pill is "hot" for either.
-          readonly property bool hot: pillMouse.containsMouse || pillClose.hovered
-          readonly property bool paneSelected: root.paneAddress !== ""
-                                               && root.paneAddress === String(topl.address)
-          readonly property var player: root.playerForWindow(topl)
-          readonly property bool hasTrack: player !== null
-                                           && !!(player.trackTitle || player.trackArtist)
-          readonly property bool playing: hasTrack && player.isPlaying === true
-          readonly property string artUrl: hasTrack ? (player.trackArtUrl || "") : ""
-          readonly property bool audible: !hasTrack && root.windowHasAudio(topl)
-
-          readonly property string label: {
-            if (pill.hasTrack) {
-              var tt = pill.player.trackTitle || ""
-              var ta = pill.player.trackArtist || ""
-              return ta && tt ? ta + " — " + tt : (tt || ta)
-            }
-            var t = String(topl.title || "")
-            if (!t && topl.wayland) t = String(topl.wayland.appId || "")
-            return t || "Untitled"
+        // Where the pill at `order` starts: every pill before it in pane
+        // order, each with the gap that follows it. Reading their widths and
+        // their order here is what makes the offsets re-evaluate when a title,
+        // an album art badge or a swap changes one of them.
+        function offsetOf(order) {
+          var sum = 0
+          for (var i = 0; i < pills.count; i++) {
+            var p = pills.itemAt(i)
+            if (p && p.order >= 0 && p.order < order) sum += p.width + pillRow.gap
           }
+          return sum
+        }
 
-          width: content.implicitWidth + Style.space(20)
-          height: Style.space(30)
-          radius: height / 2
-          color: Util.alpha(root.pickerText,
-                            (pill.hot || pill.paneSelected) ? 0.16 : 0.08)
-          border.color: pill.paneSelected ? root.pickerSelectedBorder
-                        : pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
-                                       : Util.alpha(root.pickerText, 0.18)
-          border.width: 1
-          Behavior on border.color { ColorAnimation { duration: 170 } }
+        Repeater {
+          id: pills
+          model: (root.plusSelected || !root.selectedWorkspace)
+                 ? null : root.selectedWorkspace.toplevels
 
-          // Soft accent glow ring while playing or pane-highlighted.
-          Rectangle {
-            anchors.fill: parent
-            anchors.margins: -3
+          delegate: Rectangle {
+            id: pill
+            required property var modelData
+
+            readonly property var topl: modelData
+
+            // Where this window sits in pane order, and therefore in the row.
+            // A window the sort has not placed yet has nowhere to be drawn.
+            readonly property int order:
+              StageLogic.paneIndexFor(root.selectedPanes, String(topl.address))
+            x: pillRow.offsetOf(pill.order)
+            visible: pill.order >= 0
+            Behavior on x { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+            // The × sits on top of the pill and takes the hover with it, so the
+            // pill is "hot" for either.
+            readonly property bool hot: pillMouse.containsMouse || pillClose.hovered
+            readonly property bool paneSelected: root.paneAddress !== ""
+                                                 && root.paneAddress === String(topl.address)
+            readonly property var player: root.playerForWindow(topl)
+            readonly property bool hasTrack: player !== null
+                                             && !!(player.trackTitle || player.trackArtist)
+            readonly property bool playing: hasTrack && player.isPlaying === true
+            readonly property string artUrl: hasTrack ? (player.trackArtUrl || "") : ""
+            readonly property bool audible: !hasTrack && root.windowHasAudio(topl)
+
+            readonly property string label: {
+              if (pill.hasTrack) {
+                var tt = pill.player.trackTitle || ""
+                var ta = pill.player.trackArtist || ""
+                return ta && tt ? ta + " — " + tt : (tt || ta)
+              }
+              var t = String(topl.title || "")
+              if (!t && topl.wayland) t = String(topl.wayland.appId || "")
+              return t || "Untitled"
+            }
+
+            width: content.implicitWidth + Style.space(20)
+            height: Style.space(30)
             radius: height / 2
-            color: "transparent"
-            border.color: Util.alpha(root.pickerSelectedBorder, 0.3)
-            border.width: 2
-            opacity: (pill.playing || pill.paneSelected) ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 170 } }
-          }
+            color: Util.alpha(root.pickerText,
+                              (pill.hot || pill.paneSelected) ? 0.16 : 0.08)
+            border.color: pill.paneSelected ? root.pickerSelectedBorder
+                          : pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
+                                         : Util.alpha(root.pickerText, 0.18)
+            border.width: 1
+            Behavior on border.color { ColorAnimation { duration: 170 } }
 
-          // Vertical sheen + hairline top highlight.
-          Rectangle {
-            anchors.fill: parent
-            radius: parent.radius
-            gradient: Gradient {
-              GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.05) }
-              GradientStop { position: 0.55; color: "transparent" }
+            // Soft accent glow ring while playing or pane-highlighted.
+            Rectangle {
+              anchors.fill: parent
+              anchors.margins: -3
+              radius: height / 2
+              color: "transparent"
+              border.color: Util.alpha(root.pickerSelectedBorder, 0.3)
+              border.width: 2
+              opacity: (pill.playing || pill.paneSelected) ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: 170 } }
             }
-          }
 
-          MouseArea {
-            id: pillMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.focusWindow(pill.topl.address)
-          }
-
-          Row {
-            id: content
-            anchors.centerIn: parent
-            spacing: Style.space(7)
-
-            // Album art from MPRIS, circle-cropped.
-            ClippingRectangle {
-              visible: pill.artUrl !== ""
-              anchors.verticalCenter: parent.verticalCenter
-              width: pill.height - Style.space(8)
-              height: width
-              radius: width / 2
-              color: Util.alpha(root.pickerText, 0.1)
-
-              Image {
-                anchors.fill: parent
-                source: pill.artUrl
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                smooth: true
+            // Vertical sheen + hairline top highlight.
+            Rectangle {
+              anchors.fill: parent
+              radius: parent.radius
+              gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.05) }
+                GradientStop { position: 0.55; color: "transparent" }
               }
             }
 
-            // Play state, clickable to toggle without leaving the overview.
-            Text {
-              visible: pill.hasTrack
-              anchors.verticalCenter: parent.verticalCenter
-              text: pill.playing ? "󰏤" : "󰐊"
-              color: pill.playing ? root.pickerSelectedBorder : root.pickerText
-              font.pixelSize: Style.font.title
-
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: pill.player.togglePlaying()
-              }
+            MouseArea {
+              id: pillMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.focusWindow(pill.topl.address)
             }
 
-            // Label: elided at rest; overflowing labels marquee on hover.
-            Item {
-              id: labelClip
-              anchors.verticalCenter: parent.verticalCenter
-              width: Math.min(measureText.implicitWidth, 320)
-              height: measureText.implicitHeight
-              clip: true
+            Row {
+              id: content
+              anchors.centerIn: parent
+              spacing: Style.space(7)
 
-              readonly property bool overflowing: measureText.implicitWidth > width
-              readonly property bool marquee: overflowing && pill.hot
-              readonly property real gap: Style.space(24)
+              // Album art from MPRIS, circle-cropped.
+              ClippingRectangle {
+                visible: pill.artUrl !== ""
+                anchors.verticalCenter: parent.verticalCenter
+                width: pill.height - Style.space(8)
+                height: width
+                radius: width / 2
+                color: Util.alpha(root.pickerText, 0.1)
 
+                Image {
+                  anchors.fill: parent
+                  source: pill.artUrl
+                  fillMode: Image.PreserveAspectCrop
+                  asynchronous: true
+                  smooth: true
+                }
+              }
+
+              // Play state, clickable to toggle without leaving the overview.
               Text {
-                id: measureText
-                visible: false
-                text: pill.label
-                textFormat: Text.PlainText
-                font.family: Style.font.menuFamily
-                font.pixelSize: Style.font.subtitle
+                visible: pill.hasTrack
+                anchors.verticalCenter: parent.verticalCenter
+                text: pill.playing ? "󰏤" : "󰐊"
+                color: pill.playing ? root.pickerSelectedBorder : root.pickerText
+                font.pixelSize: Style.font.title
+
+                MouseArea {
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: pill.player.togglePlaying()
+                }
               }
 
-              Text {
-                visible: !labelClip.marquee
-                width: labelClip.width
-                text: pill.label
-                textFormat: Text.PlainText
-                color: root.pickerText
-                font.family: Style.font.menuFamily
-                font.pixelSize: Style.font.subtitle
-                elide: Text.ElideRight
-              }
+              // Label: elided at rest; overflowing labels marquee on hover.
+              Item {
+                id: labelClip
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(measureText.implicitWidth, 320)
+                height: measureText.implicitHeight
+                clip: true
 
-              Row {
-                id: scroller
-                visible: labelClip.marquee
-                spacing: labelClip.gap
+                readonly property bool overflowing: measureText.implicitWidth > width
+                readonly property bool marquee: overflowing && pill.hot
+                readonly property real gap: Style.space(24)
 
                 Text {
+                  id: measureText
+                  visible: false
+                  text: pill.label
+                  textFormat: Text.PlainText
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: Style.font.subtitle
+                }
+
+                Text {
+                  visible: !labelClip.marquee
+                  width: labelClip.width
                   text: pill.label
                   textFormat: Text.PlainText
                   color: root.pickerText
                   font.family: Style.font.menuFamily
                   font.pixelSize: Style.font.subtitle
+                  elide: Text.ElideRight
                 }
-                Text {
-                  text: pill.label
-                  textFormat: Text.PlainText
-                  color: root.pickerText
-                  font.family: Style.font.menuFamily
-                  font.pixelSize: Style.font.subtitle
+
+                Row {
+                  id: scroller
+                  visible: labelClip.marquee
+                  spacing: labelClip.gap
+
+                  Text {
+                    text: pill.label
+                    textFormat: Text.PlainText
+                    color: root.pickerText
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.subtitle
+                  }
+                  Text {
+                    text: pill.label
+                    textFormat: Text.PlainText
+                    color: root.pickerText
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.subtitle
+                  }
+                }
+
+                SequentialAnimation {
+                  running: labelClip.marquee
+                  loops: Animation.Infinite
+                  onRunningChanged: if (!running) scroller.x = 0
+
+                  PauseAnimation { duration: 400 }
+                  NumberAnimation {
+                    target: scroller
+                    property: "x"
+                    from: 0
+                    to: -(measureText.implicitWidth + labelClip.gap)
+                    duration: Math.max(1500, (measureText.implicitWidth + labelClip.gap) * 16)
+                  }
+                  PauseAnimation { duration: 250 }
                 }
               }
 
-              SequentialAnimation {
-                running: labelClip.marquee
-                loops: Animation.Infinite
-                onRunningChanged: if (!running) scroller.x = 0
-
-                PauseAnimation { duration: 400 }
-                NumberAnimation {
-                  target: scroller
-                  property: "x"
-                  from: 0
-                  to: -(measureText.implicitWidth + labelClip.gap)
-                  duration: Math.max(1500, (measureText.implicitWidth + labelClip.gap) * 16)
-                }
-                PauseAnimation { duration: 250 }
+              // Always discoverable, including when the preview is too small.
+              CloseControl {
+                id: pillClose
+                anchors.verticalCenter: parent.verticalCenter
+                address: String(pill.topl.address)
+                windowTitle: pill.label
               }
-            }
 
-            // Always discoverable, including when the preview is too small.
-            CloseControl {
-              id: pillClose
-              anchors.verticalCenter: parent.verticalCenter
-              address: String(pill.topl.address)
-              windowTitle: pill.label
-            }
-
-            // Audio badge for windows making sound without MPRIS metadata.
-            Text {
-              visible: pill.audible
-              anchors.verticalCenter: parent.verticalCenter
-              text: "󰕾"
-              color: Util.alpha(root.pickerText, 0.7)
-              font.pixelSize: Style.font.subtitle
+              // Audio badge for windows making sound without MPRIS metadata.
+              Text {
+                visible: pill.audible
+                anchors.verticalCenter: parent.verticalCenter
+                text: "󰕾"
+                color: Util.alpha(root.pickerText, 0.7)
+                font.pixelSize: Style.font.subtitle
+              }
             }
           }
         }

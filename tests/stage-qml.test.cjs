@@ -51,12 +51,16 @@ assert.ok(!/"hyprctl",\s*"dispatch"/.test(qml),
           'dispatches go through Hyprland.dispatch, not a hyprctl child');
 assert.ok(/Hyprland\.dispatch\(/.test(qml), 'Hyprland.dispatch is used');
 
-// The thumbnail Repeaters bind the ObjectModel, not its values array: an
-// array is a new model on every membership change, which recreates every
-// delegate and restarts every live capture.
-for (const line of qml.split('\n'))
+// Every Repeater over windows binds the ObjectModel, not a JS array: an array
+// is a new model on every membership change *and* on every re-tile (sortPanes
+// returns a fresh one), which recreates every delegate -- every live capture
+// with the thumbnails, every MPRIS and PipeWire lookup with the pills.
+for (const line of qml.split('\n')) {
   assert.ok(!/^\s*(model|delegate:\s*\w+\s*model):.*toplevels\.values/.test(line),
             'Repeater models bind toplevels, not toplevels.values: ' + line.trim());
+  assert.ok(!/^\s*model:.*selectedPanes/.test(line),
+            'Repeater models bind toplevels, not the sorted array: ' + line.trim());
+}
 
 // The shared logic lives in one importable module.
 assert.ok(/import "StageLogic\.js" as StageLogic/.test(qml), 'StageLogic.js is imported');
