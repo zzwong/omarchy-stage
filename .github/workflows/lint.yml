@@ -34,7 +34,6 @@ jobs:
             --unqualified disable \
             --missing-property disable \
             --uncreatable-type disable \
-            --signal-handler-parameters disable \
             Stage.qml
 
       - name: Validate JSON

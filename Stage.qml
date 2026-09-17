@@ -399,6 +399,14 @@ Item {
     onTriggered: root.cycled = false
   }
 
+  // A close, or anything else that edits the desktop, is not a step:
+  // releasing the modifier after one must not jump anywhere. Stopping the
+  // watchdog together with the flag keeps the two from drifting apart.
+  function disarmCycle() {
+    root.cycled = false
+    holdWatchdog.stop()
+  }
+
   function cycleStep(delta) {
     root.cycled = true
     root.kbdPriority = true
@@ -423,8 +431,7 @@ Item {
     wallpaperProbe.running = true
     settingsProbe.running = true
     root.kbdPriority = false
-    root.cycled = false
-    holdWatchdog.stop()
+    root.disarmCycle()
     // Reopening on the same workspace changes neither viewMode nor
     // selectedIndex, so nothing else clears a stale pane zoom.
     root.selectPane(-1)
@@ -436,8 +443,7 @@ Item {
 
   function close() {
     root.opened = false
-    root.cycled = false
-    holdWatchdog.stop()
+    root.disarmCycle()
     geometryRefresh.stop()
     rebuildCoalesce.stop()
   }
@@ -499,8 +505,7 @@ Item {
     // Only a request that is actually going out disarms hold-to-cycle: a
     // debounced repeat or a click on a preview the compositor has already
     // dropped must not silently cancel the release-to-focus the user set up.
-    root.cycled = false
-    holdWatchdog.stop()
+    root.disarmCycle()
     var next = StageLogic.prunePending(root.pendingCloses, now)
     next[addr] = now + 2000
     root.pendingCloses = next
@@ -516,8 +521,13 @@ Item {
 
   // Both thumbnail delegates place their control the same way and differ only
   // in what encloses them: an overscanned, sheared carousel slab, or a flat
-  // card whose content starts at its own origin.
-  function closeSpotFor(thumb, contentX, contentY, frame, skew) {
+  // card whose content starts at its own origin. It is only solved for a
+  // thumbnail that is actually showing a control: every slab animates its
+  // size, and an unselected slice would otherwise re-solve the clamps for
+  // each of its windows on every frame of that animation.
+  readonly property var closeSpotHidden: ({ x: 0, y: 0, visible: false })
+  function closeSpotFor(show, thumb, contentX, contentY, frame, skew) {
+    if (!show) return root.closeSpotHidden
     return StageLogic.closeControlPosition({
       thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
                height: thumb.height, scale: thumb.scale },
@@ -765,16 +775,18 @@ Item {
             // intersection instead: the same corner wherever that corner is
             // fully visible, pushed in by the overscan fringe and the skew
             // allowance where it is not.
+            readonly property bool closeArmed:
+              slab.selected && (thumbHover.hovered || thumb.paneSelected)
             readonly property var closeSpot:
-              root.closeSpotFor(thumb, wsContent.x, wsContent.y, slab, slab.skew)
+              root.closeSpotFor(closeArmed, thumb, wsContent.x, wsContent.y,
+                                slab, slab.skew)
 
             CloseControl {
               x: thumb.closeSpot.x
               y: thumb.closeSpot.y
               // Hidden rather than half-visible if even the clamped control
               // would not fit inside the thumbnail.
-              visible: slab.selected && thumb.closeSpot.visible
-                       && (thumbHover.hovered || thumb.paneSelected)
+              visible: thumb.closeSpot.visible
               address: String(thumb.topl.address)
               windowTitle: String(thumb.topl.title || "window")
             }
@@ -938,8 +950,7 @@ Item {
         if (root.keybindMode !== "cycle" || !root.cycled) return
         if (event.key !== Qt.Key_Meta && event.key !== Qt.Key_Super_L
             && event.key !== Qt.Key_Super_R) return
-        root.cycled = false
-        holdWatchdog.stop()
+        root.disarmCycle()
         root.activateCurrent()
         event.accepted = true
       }
@@ -1569,12 +1580,12 @@ Item {
                   // monitor edge would lose the control; keep it inside. Same
                   // placement as the carousel with no shear and no overscan.
                   readonly property var closeSpot:
-                    root.closeSpotFor(thumb, 0, 0, card, 0)
+                    root.closeSpotFor(cardThumbHover.hovered, thumb, 0, 0, card, 0)
 
                   CloseControl {
                     x: thumb.closeSpot.x
                     y: thumb.closeSpot.y
-                    visible: thumb.closeSpot.visible && cardThumbHover.hovered
+                    visible: thumb.closeSpot.visible
                     address: String(thumb.topl.address)
                     windowTitle: String(thumb.topl.title || "window")
                   }

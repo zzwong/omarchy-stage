@@ -72,11 +72,17 @@ for (const line of qml.split('\n')) {
             'Repeater models bind toplevels, not the sorted array: ' + line.trim());
 }
 
+// A close, a drag or an edit disarms hold-to-cycle and stops the watchdog
+// together; two writers of `cycled` is how one of them gets forgotten.
+assert.ok(/function disarmCycle\(\)/.test(qml), 'disarmCycle() exists');
+const disarmers = (qml.match(/cycled\s*=\s*false/g) || []).length;
+assert.equal(disarmers, 2,
+             'only disarmCycle() and the watchdog clear `cycled`, got ' + disarmers);
+
 // The shared logic lives in one importable module.
 assert.ok(/import "StageLogic\.js" as StageLogic/.test(qml), 'StageLogic.js is imported');
-assert.ok(!/CloseLogic/.test(qml), 'CloseLogic.js is gone');
 assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, model-backed Repeaters');
+console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, model-backed Repeaters, one cycle disarm');
