@@ -189,7 +189,23 @@ assertPlaced(carousel({ x: 500, y: 300, w: 900, h: 500 }), 'floating window');
 // Too small to hold a control at all.
 {
   const tiny = carousel({ x: 1700, y: 900, w: 100, h: 100 });
-  assert.equal(tiny.spot.visible, false, 'a sub-64px thumbnail has no control');
+  assert.equal(tiny.spot.visible, false, 'a thumbnail under two controls wide has no control');
+}
+// A narrow window against the slab's advancing left edge: wide enough to pass
+// the size gate, but the left clamp pushes the control right past the
+// thumbnail's own width. Hidden, or fully contained -- never half off.
+{
+  const slab = { width: 900, height: 506, skew: 36 };
+  const content = { x: -17.6, y: -10.12 };
+  for (let w = 68; w <= 78; w++) {
+    const thumb = { x: 0, y: 0, width: w, height: 300, scale: 1 };
+    const spot = L.closeControlPosition({ thumb, content, slab, size: SIZE, pad: PAD });
+    assert.ok(!spot.visible
+              || (spot.x >= 0 && spot.x + SIZE <= w
+                  && spot.y >= 0 && spot.y + SIZE <= thumb.height),
+              'a ' + w + 'px top-left thumbnail: hidden or contained, got x='
+              + spot.x + ' visible=' + spot.visible);
+  }
 }
 // A card: no shear, no overscan, but the card clips a window that hangs over
 // the monitor edge.

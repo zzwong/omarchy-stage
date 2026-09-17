@@ -79,12 +79,12 @@ Every pill is click-to-focus outside its dedicated controls.
 
 ### Closing windows
 
-The 32px `×` target appears on thumbnail hover, or on keyboard-selected
-panes. Picker carousel/grid expose it on the selected workspace only; title
+The `×` target appears on thumbnail hover, or on keyboard-selected panes,
+sized off the shell's spacing scale like everything else in the overlay. Picker carousel/grid expose it on the selected workspace only; title
 pills also have an always-visible `×` as a fallback for tiny previews. Cards
 expose hover controls on individual previews, but have no pane mode or title
-pill fallback. Thumbnails smaller than 64px in either dimension omit the
-control rather than covering ordinary click targets; use picker pills for
+pill fallback. Thumbnails too small to hold the control clear of the window
+omit it rather than covering ordinary click targets; use picker pills for
 those windows. The control sits inside the visible part of its preview, so
 the workspace slab's skewed mask never clips it, and it takes a contrasting
 glyph on hover. This change adds no movement or dragging controls.
@@ -123,8 +123,9 @@ Manual checklist (requires an isolated compositor or disposable windows):
 - Reorder window geometry externally: selection stays at the same address.
   Close the last pane; no stale selection or accidental focus/dismissal.
 - Begin a mouse close after a cycle step: releasing Super must not activate.
-  Inspect hover/keyboard visibility, 32px hit targets, clipping and accessibility
-  names at different display scales.
+  Inspect hover/keyboard visibility, hit targets, clipping and accessibility
+  names at different display scales, and that hovering a pill's × keeps the
+  pill itself highlighted.
 
 ## Settings
 

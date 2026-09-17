@@ -174,8 +174,13 @@ function closeControlPosition(o) {
     return {
         x: x,
         y: y,
+        // Both clamps can lose: a narrow thumbnail against the slab's
+        // advancing left edge is pushed right past its own width, and a short
+        // one past its own height. Hide rather than draw a control hanging
+        // off the preview it belongs to.
         visible: t.width >= size * 2 && t.height >= size * 2
-                 && x >= 0 && y + size <= t.height
+                 && x >= 0 && x + size <= t.width
+                 && y >= 0 && y + size <= t.height
     }
 }
 

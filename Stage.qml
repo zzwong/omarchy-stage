@@ -425,10 +425,9 @@ Item {
   // rather than per click.
   //
   // Not at load: Quickshell resolves `usingLua` from the compositor, and the
-  // reply lands a round trip (~30 ms, measured) after the shell finishes
-  // loading, so the property still reads false then. The first open is the
-  // earliest moment the answer means anything, and the last one before it
-  // matters.
+  // reply lands a round trip (~30 ms here) after the shell finishes loading,
+  // so the property still reads false then. The first open is the earliest
+  // moment the answer means anything, and the last one before it matters.
   property bool luaWarningShown: false
   function warnUnlessLua() {
     if (root.luaWarningShown || Hyprland.usingLua) return
@@ -460,19 +459,22 @@ Item {
   }
 
   // One control size for the component and for the placement maths that
-  // keeps it inside its thumbnail.
-  readonly property real closeControlSize: 32
-  readonly property real closeControlPad: 8
+  // keeps it inside its thumbnail, on the shell's spacing scale like every
+  // other dimension here: a theme that makes the shell denser or roomier
+  // moves the control and its clearances with it.
+  readonly property real closeControlSize: Style.space(24)
+  readonly property real closeControlPad: Style.space(6)
 
   component CloseControl: Rectangle {
     id: closeControl
     required property string address
     property string windowTitle: "window"
+    readonly property bool hovered: closeHover.hovered
     width: root.closeControlSize
     height: root.closeControlSize
-    radius: 8
-    color: closeMouse.containsMouse ? root.selectedBorder : root.background
-    border.color: closeMouse.containsMouse ? root.selectedBorder : root.border
+    radius: Style.space(6)
+    color: closeControl.hovered ? root.selectedBorder : root.background
+    border.color: closeControl.hovered ? root.selectedBorder : root.border
     readonly property color glyphColor:
       StageLogic.contrastColor(closeControl.color, root.foreground, root.background)
     Accessible.role: Accessible.Button
@@ -482,12 +484,17 @@ Item {
       anchors.centerIn: parent
       text: "×"
       color: closeControl.glyphColor
-      font.pixelSize: 24
+      font.pixelSize: Style.font.iconLarge
     }
+    // Qt delivers hover to the frontmost item that accepts it, so whatever
+    // draws this control takes the pointer away from anything underneath —
+    // on a title pill, reaching the × would otherwise drop the pill's
+    // highlight and snap its marquee back to the start. The handler keeps
+    // that state readable (`hovered`) so an enclosing surface can fold it
+    // into its own, and leaves the click to the MouseArea below.
+    HoverHandler { id: closeHover }
     MouseArea {
-      id: closeMouse
       anchors.fill: parent
-      hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       // Never propagate to the thumbnail's focus or background dismiss area.
       onClicked: root.requestWindowClose(closeControl.address)
@@ -1143,6 +1150,9 @@ Item {
           required property var modelData
 
           readonly property var topl: modelData
+          // The × sits on top of the pill and takes the hover with it, so the
+          // pill is "hot" for either.
+          readonly property bool hot: pillMouse.containsMouse || pillClose.hovered
           readonly property bool paneSelected: root.paneAddress !== ""
                                                && root.paneAddress === String(topl.address)
           readonly property var player: root.playerForWindow(topl)
@@ -1164,10 +1174,10 @@ Item {
           }
 
           width: content.implicitWidth + Style.space(20)
-          height: Math.max(32, Style.space(30))
+          height: Style.space(30)
           radius: height / 2
           color: Util.alpha(root.pickerText,
-                            (pillMouse.containsMouse || pill.paneSelected) ? 0.16 : 0.08)
+                            (pill.hot || pill.paneSelected) ? 0.16 : 0.08)
           border.color: pill.paneSelected ? root.pickerSelectedBorder
                         : pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
                                        : Util.alpha(root.pickerText, 0.18)
@@ -1252,7 +1262,7 @@ Item {
               clip: true
 
               readonly property bool overflowing: measureText.implicitWidth > width
-              readonly property bool marquee: overflowing && pillMouse.containsMouse
+              readonly property bool marquee: overflowing && pill.hot
               readonly property real gap: Style.space(24)
 
               Text {
@@ -1315,6 +1325,7 @@ Item {
 
             // Always discoverable, including when the preview is too small.
             CloseControl {
+              id: pillClose
               anchors.verticalCenter: parent.verticalCenter
               address: String(pill.topl.address)
               windowTitle: pill.label
