@@ -32,11 +32,16 @@ assert.equal(assignments.length, 1,
              'rebuildWorkspaces assigns selectedIndex exactly once, got '
              + assignments.length);
 
+// Every compositor action runs through the dispatcher Process, whose reply is
+// read; a detached exec would fail silently.
+assert.ok(!/execDetached/.test(qml), 'no fire-and-forget dispatch in Stage.qml');
+assert.ok(/id:\s*dispatcher/.test(qml), 'the dispatcher Process is present');
+
 // The thumbnail Repeaters bind the ObjectModel, not its values array: an
 // array is a new model on every membership change, which recreates every
 // delegate and restarts every live capture.
 for (const line of qml.split('\n'))
-  assert.ok(!/^\s*model:.*toplevels\.values/.test(line),
+  assert.ok(!/^\s*(model|delegate:\s*\w+\s*model):.*toplevels\.values/.test(line),
             'Repeater models bind toplevels, not toplevels.values: ' + line.trim());
 
 // The shared logic lives in one importable module.
@@ -46,4 +51,4 @@ assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: no polling timer, one selectedIndex assignment, model-backed Repeaters');
+console.log('Stage.qml: no polling timer, one selectedIndex assignment, observable dispatch, model-backed Repeaters');

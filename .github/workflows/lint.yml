@@ -21,8 +21,9 @@ jobs:
         run: node tests/run.cjs
 
       # The qs.* shell modules and Quickshell types only resolve inside
-      # omarchy-shell, so import-dependent categories are disabled; this
-      # gates on parse errors and every other warning category.
+      # omarchy-shell, so import-dependent categories are disabled (that
+      # includes the C++ enum parameter types of Quickshell's own signals);
+      # this gates on parse errors and every other warning category.
       - name: qmllint Stage.qml
         run: |
           /usr/lib/qt6/bin/qmllint \
@@ -30,6 +31,7 @@ jobs:
             --unqualified disable \
             --missing-property disable \
             --uncreatable-type disable \
+            --signal-handler-parameters disable \
             Stage.qml
 
       - name: Validate JSON

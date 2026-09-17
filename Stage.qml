@@ -378,8 +378,57 @@ Item {
     else root.open("{}")
   }
 
-  function luaDispatch(lua) {
-    Quickshell.execDetached(["hyprctl", "dispatch", lua])
+  // Every Stage action is a Hyprland Lua dispatch, and a dispatch that the
+  // compositor rejects is invisible: the overlay would go on offering
+  // controls that do nothing. Run them through one process whose reply is
+  // read — under a hyprlang config every `hl.dsp.*` answers "Invalid
+  // dispatcher" — and warn once per session rather than per click.
+  // `dismiss()` only hides the overlay (the plugin is keepLoaded), so an
+  // in-flight dispatch outlives it.
+  function dispatch(lua) {
+    if (lua) dispatcher.submit(lua)
+  }
+
+  Process {
+    id: dispatcher
+
+    // Hyprland answers one request at a time; a second dispatch while one is
+    // in flight queues rather than replacing it, so nothing is dropped.
+    property var queue: []
+    property string current: ""
+    property bool warned: false
+
+    function submit(lua) {
+      dispatcher.queue = dispatcher.queue.concat([lua])
+      dispatcher.pump()
+    }
+
+    function pump() {
+      if (dispatcher.running || dispatcher.queue.length === 0) return
+      dispatcher.current = dispatcher.queue[0]
+      dispatcher.queue = dispatcher.queue.slice(1)
+      dispatcher.exec(["hyprctl", "dispatch", dispatcher.current])
+    }
+
+    stdout: StdioCollector { id: dispatchOut }
+    stderr: StdioCollector { id: dispatchErr }
+
+    onExited: function(exitCode) {
+      var failure = StageLogic.dispatchFailure(exitCode, dispatchOut.text,
+                                               dispatchErr.text)
+      if (failure && !dispatcher.warned) {
+        dispatcher.warned = true
+        console.warn("Stage: hyprctl rejected \"" + dispatcher.current
+          + "\" with \"" + failure + "\". Stage's actions need a Lua Hyprland"
+          + " config (Omarchy's default); a hyprlang config has no hl.dsp"
+          + " dispatchers, so they do nothing.")
+      }
+      dispatcher.current = ""
+      // Deferred: the next process may only start once this one has fully
+      // finished, and the reply above must be read before the collectors
+      // are handed to it.
+      if (dispatcher.queue.length > 0) Qt.callLater(dispatcher.pump)
+    }
   }
 
   // A bounded per-address debounce, not an optimistic removal: applications
@@ -397,7 +446,7 @@ Item {
     var next = StageLogic.prunePending(root.pendingCloses, now)
     next[addr] = now + 2000
     root.pendingCloses = next
-    root.luaDispatch(StageLogic.closeLua(addr))
+    root.dispatch(StageLogic.closeLua(addr))
   }
 
   // One control size for the component and for the placement maths that
@@ -437,7 +486,7 @@ Item {
 
   function focusWorkspace(id) {
     root.dismiss()
-    root.luaDispatch("hl.dsp.focus({ workspace = \"" + id + "\" })")
+    root.dispatch(StageLogic.focusWorkspaceLua(id))
   }
 
   function createWorkspace() {
@@ -446,10 +495,7 @@ Item {
 
   function focusWindow(address) {
     root.dismiss()
-    // Quickshell reports toplevel addresses without the 0x prefix.
-    var addr = String(address)
-    if (addr.indexOf("0x") !== 0) addr = "0x" + addr
-    root.luaDispatch("hl.dsp.focus({ window = \"address:" + addr + "\" })")
+    root.dispatch(StageLogic.focusWindowLua(address))
   }
 
   function selectAdjacent(delta) {

@@ -101,6 +101,11 @@ two seconds; after that you can retry if the application declines. Unsaved-work
 dialogs may require focusing the application to answer them. Closing disarms
 hold-to-cycle's release-to-focus action.
 
+Every Stage action — closing, and jumping to a window or workspace — is a
+Hyprland **Lua** dispatch, so Stage needs a Lua config (Omarchy's default).
+Under a hyprlang config the dispatchers do not exist, the actions do nothing,
+and Stage logs one warning naming the rejected dispatch.
+
 #### Close-controls QA
 
 Automated: `node tests/run.cjs`, plus the lint workflow commands.

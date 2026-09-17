@@ -18,6 +18,26 @@ function closeLua(value) {
     return addr ? 'hl.dsp.window.close({ window = "address:' + addr + '" })' : ""
 }
 
+function focusWindowLua(value) {
+    var addr = address(value)
+    return addr ? 'hl.dsp.focus({ window = "address:' + addr + '" })' : ""
+}
+
+function focusWorkspaceLua(id) {
+    var n = Number(id)
+    return Number.isFinite(n) && Math.floor(n) === n
+        ? 'hl.dsp.focus({ workspace = "' + n + '" })' : ""
+}
+
+// `hyprctl dispatch` answers "ok" when the dispatcher ran. Anything else --
+// "Invalid dispatcher" on a hyprlang config, an error text, a non-zero exit --
+// means the action silently did nothing.
+function dispatchFailure(exitCode, stdout, stderr) {
+    var reply = String(stdout || "").trim() || String(stderr || "").trim()
+    if (exitCode === 0 && reply === "ok") return ""
+    return reply || ("exit " + exitCode)
+}
+
 // --- Close requests --------------------------------------------------------
 
 // A close is worth sending when the window is still live and no request for
