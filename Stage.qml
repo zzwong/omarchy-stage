@@ -263,8 +263,13 @@ Item {
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (root.opened && StageLogic.shouldRefresh(String(event.name)))
-        geometryRefresh.restart()
+      var name = String(event.name)
+      // The compositor confirming the window is gone ends the debounce; a
+      // handle Hyprland has reused is a different window.
+      if (name === "closewindow")
+        root.pendingCloses = StageLogic.prunePending(
+          root.pendingCloses, Date.now(), StageLogic.address(event.data))
+      if (root.opened && StageLogic.shouldRefresh(name)) geometryRefresh.restart()
     }
   }
 

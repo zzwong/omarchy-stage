@@ -46,10 +46,12 @@ const own = o => Object.assign({}, o);
 const list = a => Array.from(a);
 assert.deepEqual(own(L.prunePending({ '0xa': 150, '0xb': 250 }, 200)), { '0xb': 250 },
                  'expired entries are dropped');
+assert.deepEqual(own(L.prunePending({ '0xa': 250, '0xb': 250 }, 200, '0xa')),
+                 { '0xb': 250 }, 'the closed window is dropped early');
 assert.deepEqual(own(L.prunePending({}, 200)), {});
 {
   const before = { '0xa': 250 };
-  L.prunePending(before, 100);
+  L.prunePending(before, 200, '0xa');
   assert.deepEqual(own(before), { '0xa': 250 }, 'the input is not mutated');
 }
 

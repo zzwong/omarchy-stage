@@ -46,11 +46,12 @@ function canRequest(addr, live, pending, now) {
     return !!addr && live.indexOf(addr) >= 0 && !(pending[addr] > now)
 }
 
-// Copy of `pending` without the entries that have expired.
-function prunePending(pending, now) {
+// Copy of `pending` without expired entries, and without `drop` (the address
+// the compositor just told us is gone) when one is given.
+function prunePending(pending, now, drop) {
     var next = {}
     for (var key in pending)
-        if (pending[key] > now) next[key] = pending[key]
+        if (pending[key] > now && key !== drop) next[key] = pending[key]
     return next
 }
 
