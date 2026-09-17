@@ -137,6 +137,63 @@ Manual checklist (requires an isolated compositor or disposable windows):
   names at different display scales, and that hovering a pill's × keeps the
   pill itself highlighted.
 
+### Moving windows
+
+In the picker's grid (`↑` from the carousel), drag a window's thumbnail onto
+another workspace card — or onto the `+` slot — to move that window there.
+The thumbnail takes the pointer over once it has travelled 12 logical pixels;
+below that the press is still a click, and clicking a thumbnail, a card or
+`+` does exactly what it always did. A label of the window being moved
+follows the pointer, and the card a release would land on is washed in the
+accent colour and takes a thicker border; nothing is highlighted while a
+release would do nothing.
+
+A drop lands on a card as a whole. The workspace chip and the thumbnails
+drawn on it are part of the card, so releasing anywhere inside its skewed
+outline moves the window to that workspace.
+
+Moves do not follow the window: the compositor's focus and the desktop's
+workspace stay where they are, and Stage stays open on what you were looking
+at. `+` creates the next free workspace, counted at the moment of release
+from the workspaces this monitor is showing — the number printed on the card
+itself. Thumbnails re-tile in place afterwards, on the compositor's own
+events; nothing has to be reopened.
+
+`Esc` cancels the gesture instead of closing Stage, and the release that
+follows it does nothing; the next `Esc` closes Stage as usual. Dropping onto
+the source workspace, outside every card, onto a workspace that disappeared
+while the button was down, or after the window itself was closed or moved
+away, all do nothing. Selection is frozen while a window is being carried,
+and picking one up disarms hold-to-cycle's release-to-focus action — an
+ordinary click does not.
+
+**Grouped (tabbed) windows refuse to drag.** Hyprland's move dispatcher acts
+on the whole group when its selector names a member, and moving a group
+behind a single thumbnail would be a surprise; ungroup the window first.
+Dragging is also grid-only — not carousel slices, flat cards or title pills —
+and dropping a window on its own workspace never reorders or swaps panes,
+which is deliberately left to a later change.
+
+#### Drag QA
+
+Automated: `node tests/run.cjs`, plus the lint workflow commands.
+Manual checklist (requires an isolated compositor or disposable windows):
+
+- Click, sub-threshold drag, and drag on the selected and unselected cards:
+  selection and focus behave exactly as before the gesture existed, including
+  a click that drifts a few pixels and a click on `+`.
+- Move to another workspace and to `+`; Stage stays open, the desktop does
+  not follow, and both cards re-tile without reopening.
+- Press `Esc` mid-drag, then release: nothing is focused, Stage stays open,
+  and the next `Esc` closes it.
+- Release in card gaps, on skew-cut corners, on the source workspace and
+  outside every card: nothing happens. Release on another card's workspace
+  chip and the window moves, as anywhere else on that card.
+- Close the dragged window, and empty the destination workspace, with the
+  pointer held still: the highlight goes away and the release does nothing.
+- Drag a grouped window: no proxy, no move. Drag with a close `×` visible:
+  the `×` still closes, and dragging from elsewhere on the thumbnail works.
+
 ## Settings
 
 Optional. Defaults are built in; to override:
