@@ -508,7 +508,7 @@ function editLua(addr, action, direction, shownIds) {
 //   event.key, event.modifiers, event.isAutoRepeat
 //   ctx.panes         pane mode is active in the carousel
 //   ctx.editBusy      an edit is in flight in the compositor
-//   ctx.closeKeyHeld  X is already down
+//   ctx.dragPending   a grid thumbnail is held (see the Drag section)
 function routeKey(event, ctx) {
     var key = Number(event.key)
     // Keypad arrows, Enter and digits carry KeypadModifier. They are the same
@@ -517,18 +517,29 @@ function routeKey(event, ctx) {
     var mods = Number(event.modifiers || 0) & ~MOD.keypad
     var panes = !!ctx.panes
 
-    if (key === KEY.escape) return decision("dismiss")
+    // A held thumbnail owns the keyboard: Escape cancels the gesture and
+    // nothing navigates out from under it. The overlay stays open, so the
+    // next Escape is the one that dismisses. Autorepeat is excluded both
+    // times: holding Escape to cancel a drag must not then dismiss.
+    if (key === KEY.escape) {
+        if (event.isAutoRepeat) return decision("consume")
+        return decision(ctx.dragPending ? "dragCancel" : "dismiss")
+    }
+    if (ctx.dragPending) return decision("consume")
 
     // An edit is a single compositor round trip. Keys that arrive during it
     // would act on the geometry it is about to change, so they are dropped
     // rather than queued -- a held chord simply steps again once it lands.
     if (ctx.editBusy) return decision("consume")
 
-    // The physical key latches on every press, modified or not: the release
-    // clears it, so holding X can never cascade onto the next pane.
+    // Held X must never cascade onto the pane the hand-off selects. QtWayland
+    // marks every repeat of a client-side autorepeat, so the first press is
+    // the only one without the flag: no latch to hold, and none to be left
+    // set when focus leaves mid-hold. X is always Stage's key, so a press
+    // that may not close anything is still swallowed.
     if (key === KEY.x)
-        return decision(panes && mods === MOD.none && !ctx.closeKeyHeld
-                        && !event.isAutoRepeat ? "close" : "closeHeld")
+        return decision(panes && mods === MOD.none && !event.isAutoRepeat
+                        ? "close" : "consume")
 
     var direction = arrowDirection(key)
     if (direction && mods === MOD.shift)

@@ -35,8 +35,8 @@ assert.equal(L.MOD.keypad, 0x20000000);
 
 // --- routeKey -------------------------------------------------------------
 const K = L.KEY, M = L.MOD;
-const PANE = { panes: true, editBusy: false, closeKeyHeld: false };
-const LIST = { panes: false, editBusy: false, closeKeyHeld: false };
+const PANE = { panes: true, editBusy: false };
+const LIST = { panes: false, editBusy: false };
 
 function route(key, modifiers, ctx, extra) {
   return L.routeKey(Object.assign({ key: key, modifiers: modifiers || 0,
@@ -105,17 +105,24 @@ is(route(0x39 /* Key_9 */, 0), 'workspace', 9);
 is(route(0x30 /* Key_0 */, 0), 'none', null); // there is no workspace 0
 is(route(0x41 /* Key_A */, 0), 'none', null);
 
-// X closes only an unmodified first press in pane mode; every other press
-// still latches the physical key so a hold cannot cascade.
+// X closes only an unmodified, non-repeat press in pane mode; every other X
+// is still Stage's key and is swallowed rather than typed anywhere.
 is(route(K.x, 0, PANE), 'close');
-is(route(K.x, 0, LIST), 'closeHeld');
-is(route(K.x, M.shift, PANE), 'closeHeld');
-is(route(K.x, 0, { panes: true, closeKeyHeld: true }), 'closeHeld');
-is(route(K.x, 0, PANE, { isAutoRepeat: true }), 'closeHeld');
+is(route(K.x, 0, LIST), 'consume');
+is(route(K.x, M.shift, PANE), 'consume');
+is(route(K.x, 0, PANE, { isAutoRepeat: true }), 'consume');
+is(route(K.escape, 0, PANE, { isAutoRepeat: true }), 'consume'); // a held Escape never dismisses
+
+// A held thumbnail: Escape cancels the drag, nothing else moves the selection.
+const DRAG = { panes: false, editBusy: false, dragPending: true };
+is(route(K.escape, 0, DRAG), 'dragCancel');
+is(route(K.escape, 0, DRAG, { isAutoRepeat: true }), 'consume');
+for (const [key, mods] of [[K.right, 0], [K.up, 0], [K.ret, 0], [K.tab, 0], [0x31, 0], [K.right, M.shift]])
+  is(route(key, mods, DRAG), 'consume');
 
 // While an edit is in flight every key is dropped rather than queued against
 // the geometry it is about to change -- except the one that gets you out.
-const BUSY = { panes: true, editBusy: true, closeKeyHeld: false };
+const BUSY = { panes: true, editBusy: true };
 is(route(K.escape, 0, BUSY), 'dismiss');
 for (const [key, mods] of [[K.right, M.shift], [K.right, 0], [K.x, 0],
                            [K.tab, 0], [K.ret, 0], [0x31, 0]])
