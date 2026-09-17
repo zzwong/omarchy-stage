@@ -121,16 +121,26 @@ function reconcileSelection(o) {
 // --- Compositor events -----------------------------------------------------
 
 // Window geometry lives in each toplevel's lastIpcObject, which only changes
-// when something asks Hyprland for it. These are the events after which the
-// rectangles Stage draws are stale; everything else (titles, focus, audio)
-// must not cost an IPC round trip.
-var REFRESH_EVENTS = [
-    "openwindow", "closewindow", "movewindow", "movewindowv2",
-    "changefloatingmode", "fullscreen", "createworkspace", "createworkspacev2",
-    "destroyworkspace", "destroyworkspacev2", "moveworkspace", "moveworkspacev2"]
+// when something asks Hyprland for it, so Stage refreshes after the events
+// that can have moved a window.
+//
+// That is almost all of them, which is why this is a denylist. An allowlist
+// of the obvious movers missed `togglegroup`, `moveintogroup`,
+// `moveoutofgroup` and a monitor appearing or going away; and several
+// dispatchers re-tile while announcing nothing at all (`swapwindow`,
+// `resizeactive`, `layoutmsg`, `centerwindow`, `movewindow` within a
+// workspace), for which a neighbouring event is the only hint there is. Name
+// the events that provably change nothing Stage draws -- titles, focus,
+// layers, audio -- and let the caller's coalescing pay for the rest.
+var QUIET_EVENTS = [
+    "windowtitle", "windowtitlev2", "activewindow", "activewindowv2",
+    "workspace", "workspacev2", "focusedmon", "focusedmonv2", "urgent",
+    "submap", "activelayout", "activespecial", "activespecialv2",
+    "screencast", "screencastv2", "pin", "minimized", "bell", "configreloaded",
+    "openlayer", "closelayer"]
 
 function shouldRefresh(eventName) {
-    return REFRESH_EVENTS.indexOf(String(eventName)) >= 0
+    return QUIET_EVENTS.indexOf(String(eventName)) < 0
 }
 
 // --- Geometry --------------------------------------------------------------

@@ -95,8 +95,8 @@ Selection tracks the same window across geometry changes; when it actually
 closes, the next pane (or previous at the end) is selected. Empty workspaces
 leave pane mode. The surviving previews pick up the compositor's new tiling
 while Stage stays open: Stage refreshes window geometry on the compositor's
-own events, batching a burst into one refresh, so nothing has to be reopened
-to look right. Duplicate requests to the same address are suppressed for
+events — all but the handful that provably move nothing — batching a burst
+into one refresh, so nothing has to be reopened to look right. Duplicate requests to the same address are suppressed for
 two seconds; after that you can retry if the application declines. Unsaved-work
 dialogs may require focusing the application to answer them. Closing disarms
 hold-to-cycle's release-to-focus action.

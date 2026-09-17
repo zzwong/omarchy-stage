@@ -273,6 +273,22 @@ Item {
     function onValuesChanged() { if (root.opened) root.rebuildWorkspaces(true) }
   }
 
+  // The rebuilt list is filtered by monitor, and a workspace can change
+  // monitor without the model's membership changing at all: Quickshell
+  // handles `moveworkspacev2` by reassigning the workspace's monitor in
+  // place, and a workspace created before its monitor is known resolves it
+  // later, both without a `valuesChanged`. Watch each workspace's own
+  // monitor, so this overlay does not go on showing another monitor's
+  // workspace (or miss one that just arrived on this one).
+  Instantiator {
+    model: Hyprland.workspaces
+    delegate: QtObject {
+      required property var modelData
+      readonly property var workspaceMonitor: modelData.monitor
+      onWorkspaceMonitorChanged: if (root.opened) root.rebuildWorkspaces(true)
+    }
+  }
+
   // Window geometry lives in each toplevel's lastIpcObject, which only
   // changes when something asks Hyprland for it — so after a window closes
   // the survivors keep their pre-close rectangles and render letterboxed

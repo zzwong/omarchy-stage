@@ -105,13 +105,19 @@ assert.equal(sel({ ids: [], preserve: false }), -1);
 
 // --- compositor events -----------------------------------------------------
 for (const name of ['openwindow', 'closewindow', 'movewindow', 'movewindowv2',
-                    'changefloatingmode', 'fullscreen', 'createworkspace',
-                    'createworkspacev2', 'destroyworkspace', 'destroyworkspacev2',
-                    'moveworkspace', 'moveworkspacev2'])
-  assert.equal(L.shouldRefresh(name), true, name + ' moves windows');
+                    'changefloatingmode', 'fullscreen', 'fullscreenv2',
+                    'createworkspace', 'createworkspacev2', 'destroyworkspace',
+                    'destroyworkspacev2', 'moveworkspace', 'moveworkspacev2',
+                    'togglegroup', 'moveintogroup', 'moveoutofgroup',
+                    'monitoradded', 'monitoraddedv2', 'monitorremoved',
+                    'monitorremovedv2', 'an-event-hyprland-adds-later'])
+  assert.equal(L.shouldRefresh(name), true, name + ' can have moved a window');
 for (const name of ['windowtitle', 'windowtitlev2', 'activewindow', 'activewindowv2',
-                    'workspace', 'workspacev2', 'focusedmon', 'monitoradded',
-                    'urgent', 'submap', ''])
+                    'workspace', 'workspacev2', 'focusedmon', 'focusedmonv2',
+                    'urgent', 'submap', 'activelayout', 'activespecial',
+                    'activespecialv2', 'screencast', 'screencastv2', 'pin',
+                    'minimized', 'bell',
+                    'configreloaded', 'openlayer', 'closelayer'])
   assert.equal(L.shouldRefresh(name), false,
                name + ' must not cost an IPC round trip');
 
