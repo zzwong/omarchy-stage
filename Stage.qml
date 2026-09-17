@@ -7,7 +7,7 @@ import Quickshell.Widgets
 import Quickshell.Services.Mpris
 import Quickshell.Services.Pipewire
 import QtQuick
-import "CloseLogic.js" as CloseLogic
+import "StageLogic.js" as StageLogic
 import QtQuick.Effects
 import QtQuick.Shapes
 import qs.Commons
@@ -204,9 +204,7 @@ Item {
   property int paneWorkspaceId: -1
   readonly property int paneIndex:
     paneWorkspaceId !== selectedWorkspaceId ? -1
-    : selectedPanes.findIndex(function(p) {
-        return String(p.address) === root.selectedPaneAddress
-      })
+    : StageLogic.paneIndexFor(selectedPanes, selectedPaneAddress)
 
   // Every pane selection goes through here; -1 leaves pane mode.
   function selectPane(index) {
@@ -224,8 +222,8 @@ Item {
     if (!root.selectedPaneAddress || root.paneIndex >= 0
         || root.paneWorkspaceId !== root.selectedWorkspaceId) return
     var addresses = root.selectedPanes.map(function(p) { return String(p.address) })
-    root.selectPane(CloseLogic.neighbor(addresses, root.selectedPaneAddress,
-                                        root.paneFallbackIndex))
+    root.selectPane(StageLogic.neighborAfterClose(
+      addresses, root.selectedPaneAddress, root.paneFallbackIndex))
   }
   onViewModeChanged: root.selectPane(-1)
 
@@ -234,17 +232,7 @@ Item {
     if (selectedIndex < 0 || selectedIndex >= workspaceList.length) return []
     var workspace = workspaceList[selectedIndex]
     if (!workspace) return []
-    var vals = workspace.toplevels.values
-    var arr = []
-    for (var i = 0; i < vals.length; i++) arr.push(vals[i])
-    arr.sort(function(a, b) {
-      var ia = a.lastIpcObject, ib = b.lastIpcObject
-      var ax = ia && ia.at ? ia.at[0] : 0, bx = ib && ib.at ? ib.at[0] : 0
-      if (ax !== bx) return ax - bx
-      var ay = ia && ia.at ? ia.at[1] : 0, by = ib && ib.at ? ib.at[1] : 0
-      return ay - by
-    })
-    return arr
+    return StageLogic.sortPanes(workspace.toplevels.values)
   }
 
   readonly property string paneAddress:
@@ -255,10 +243,8 @@ Item {
   readonly property bool plusSelected: selectedIndex === workspaceList.length
 
   function nextWorkspaceId() {
-    var max = 0
-    for (var i = 0; i < workspaceList.length; i++)
-      if (workspaceList[i].id > max) max = workspaceList[i].id
-    return max + 1
+    return StageLogic.nextWorkspaceId(
+      root.workspaceList.map(function(w) { return w.id }))
   }
 
   // Membership changes arrive as a signal from the model itself; nothing
@@ -274,15 +260,10 @@ Item {
   // until the next refresh. Refresh on the compositor's own events instead,
   // coalescing a burst into one round trip: that batches the IPC and lets
   // the compositor finish re-tiling before the geometry is read.
-  readonly property var refreshEvents: [
-    "openwindow", "closewindow", "movewindow", "movewindowv2",
-    "changefloatingmode", "fullscreen", "createworkspace", "createworkspacev2",
-    "destroyworkspace", "destroyworkspacev2", "moveworkspace", "moveworkspacev2"]
-
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (root.opened && root.refreshEvents.indexOf(String(event.name)) >= 0)
+      if (root.opened && StageLogic.shouldRefresh(String(event.name)))
         geometryRefresh.restart()
     }
   }
@@ -314,27 +295,19 @@ Item {
 
     // Only a real membership change may replace the model: reassigning an
     // equal list recreates every delegate, and with it every live capture.
-    var changed = out.length !== root.workspaceList.length
-    for (var k = 0; !changed && k < out.length; k++)
-      changed = out[k] !== root.workspaceList[k]
-    if (changed) root.workspaceList = out
+    if (StageLogic.membershipChanged(root.workspaceList, out))
+      root.workspaceList = out
 
     // Exactly one assignment: an intermediate value would notify a
     // selection nobody asked for.
-    var index
-    if (!preserve) {
-      index = out.length > 0 ? 0 : -1
-      for (var j = 0; j < out.length; j++)
-        if (Hyprland.focusedWorkspace && out[j].id === Hyprland.focusedWorkspace.id)
-          index = j
-    } else if (wasPlus) {
-      index = out.length // the "+" slot keeps its place at the end
-    } else {
-      var found = out.findIndex(function(w) { return w.id === oldId })
-      index = found >= 0 ? found
-        : out.length > 0 ? Math.min(Math.max(0, oldIndex), out.length - 1) : -1
-    }
-    root.selectedIndex = index
+    root.selectedIndex = StageLogic.reconcileSelection({
+      ids: out.map(function(w) { return w.id }),
+      oldId: oldId,
+      oldIndex: oldIndex,
+      wasPlus: wasPlus,
+      focusedId: Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : -1,
+      preserve: preserve === true
+    })
   }
 
   // --- Hold-to-cycle ("cycle" keybindMode) -----------------------------
@@ -417,37 +390,32 @@ Item {
   function requestWindowClose(value) {
     root.cycled = false
     holdWatchdog.stop()
-    var addr = CloseLogic.address(value)
-    var live = Hyprland.toplevels.values.map(function(p) { return CloseLogic.address(p.address) })
+    var addr = StageLogic.address(value)
+    var live = Hyprland.toplevels.values.map(function(p) { return StageLogic.address(p.address) })
     var now = Date.now()
-    if (!CloseLogic.canRequest(addr, live, pendingCloses, now)) return
-    var next = ({})
-    for (var key in pendingCloses)
-      if (pendingCloses[key] > now) next[key] = pendingCloses[key]
+    if (!StageLogic.canRequest(addr, live, root.pendingCloses, now)) return
+    var next = StageLogic.prunePending(root.pendingCloses, now)
     next[addr] = now + 2000
-    pendingCloses = next
-    root.luaDispatch(CloseLogic.closeLua(addr))
+    root.pendingCloses = next
+    root.luaDispatch(StageLogic.closeLua(addr))
   }
+
+  // One control size for the component and for the placement maths that
+  // keeps it inside its thumbnail.
+  readonly property real closeControlSize: 32
+  readonly property real closeControlPad: 8
 
   component CloseControl: Rectangle {
     id: closeControl
     required property string address
     property string windowTitle: "window"
-    width: 32
-    height: 32
+    width: root.closeControlSize
+    height: root.closeControlSize
     radius: 8
     color: closeMouse.containsMouse ? root.selectedBorder : root.background
     border.color: closeMouse.containsMouse ? root.selectedBorder : root.border
-    // The accent fill on hover can be lighter or darker than the menu
-    // background depending on the theme, and a foreground glyph on a light
-    // accent is unreadable. Pick whichever theme token contrasts more with
-    // the fill actually painted.
-    readonly property color glyphColor: {
-      function lum(c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b }
-      var fill = lum(closeControl.color)
-      return Math.abs(lum(root.foreground) - fill) >= Math.abs(lum(root.background) - fill)
-        ? root.foreground : root.background
-    }
+    readonly property color glyphColor:
+      StageLogic.contrastColor(closeControl.color, root.foreground, root.background)
     Accessible.role: Accessible.Button
     Accessible.name: "Close " + windowTitle
     Accessible.onPressAction: root.requestWindowClose(closeControl.address)
@@ -669,50 +637,19 @@ Item {
             // intersection instead: the same corner wherever that corner is
             // fully visible, pushed in by the overscan fringe and the skew
             // allowance where it is not.
-            readonly property real closeSize: 32 // matches CloseControl
-            readonly property real closePad: 8
-            // Thumb-local -> slab coordinates; pane zoom scales the
-            // thumbnail about its own centre.
-            function toSlabX(px) {
-              return wsContent.x + thumb.x + thumb.width / 2
-                     + (px - thumb.width / 2) * thumb.scale
-            }
-            function toSlabY(py) {
-              return wsContent.y + thumb.y + thumb.height / 2
-                     + (py - thumb.height / 2) * thumb.scale
-            }
-            function fromSlabX(sx) {
-              return (sx - wsContent.x - thumb.x - thumb.width / 2) / thumb.scale
-                     + thumb.width / 2
-            }
-            function fromSlabY(sy) {
-              return (sy - wsContent.y - thumb.y - thumb.height / 2) / thumb.scale
-                     + thumb.height / 2
-            }
-            readonly property real closeY: Math.min(
-              Math.max(thumb.closePad, thumb.fromSlabY(thumb.closePad)),
-              Math.max(0, thumb.height - thumb.closeSize - thumb.closePad))
-            readonly property real closeX: {
-              var h = Math.max(1, slab.height)
-              // The mask's right edge recedes with the shear, so the
-              // control's lower-right corner is the binding one.
-              var lowY = Math.max(0, thumb.toSlabY(thumb.closeY + thumb.closeSize))
-              var rightAt = slab.width - slab.skew * lowY / h - thumb.closePad
-              var highY = Math.max(0, thumb.toSlabY(thumb.closeY))
-              var leftAt = slab.skew * (1 - highY / h) + thumb.closePad
-              var px = Math.min(thumb.width - thumb.closePad - thumb.closeSize,
-                                thumb.fromSlabX(rightAt) - thumb.closeSize)
-              return Math.max(px, thumb.fromSlabX(leftAt))
-            }
+            readonly property var closeSpot: StageLogic.closeControlPosition({
+              thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
+                       height: thumb.height, scale: thumb.scale },
+              content: { x: wsContent.x, y: wsContent.y },
+              slab: { width: slab.width, height: slab.height, skew: slab.skew },
+              size: root.closeControlSize, pad: root.closeControlPad })
 
             CloseControl {
-              x: thumb.closeX
-              y: thumb.closeY
+              x: thumb.closeSpot.x
+              y: thumb.closeSpot.y
               // Hidden rather than half-visible if even the clamped control
               // would not fit inside the thumbnail.
-              visible: slab.selected && thumb.width >= 64 && thumb.height >= 64
-                       && thumb.closeX >= 0
-                       && thumb.closeY + thumb.closeSize <= thumb.height
+              visible: slab.selected && thumb.closeSpot.visible
                        && (thumbHover.hovered || thumb.paneSelected)
               address: String(thumb.topl.address)
               windowTitle: String(thumb.topl.title || "window")
@@ -1467,22 +1404,19 @@ Item {
                   }
 
                   // The card clips its content, so a window hanging over the
-                  // monitor edge would lose the control; keep it inside.
-                  readonly property real closeSize: 32 // matches CloseControl
-                  readonly property real closePad: 8
-                  readonly property real closeX: Math.max(0, Math.min(
-                    thumb.width - thumb.closePad - thumb.closeSize,
-                    card.width - thumb.closePad - thumb.closeSize - thumb.x))
-                  readonly property real closeY: Math.min(
-                    Math.max(thumb.closePad, thumb.closePad - thumb.y),
-                    Math.max(0, thumb.height - thumb.closeSize - thumb.closePad))
+                  // monitor edge would lose the control; keep it inside. Same
+                  // placement as the carousel with no shear and no overscan.
+                  readonly property var closeSpot: StageLogic.closeControlPosition({
+                    thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
+                             height: thumb.height, scale: 1 },
+                    content: { x: 0, y: 0 },
+                    slab: { width: card.width, height: card.height, skew: 0 },
+                    size: root.closeControlSize, pad: root.closeControlPad })
 
                   CloseControl {
-                    x: thumb.closeX
-                    y: thumb.closeY
-                    visible: thumb.width >= 64 && thumb.height >= 64
-                             && thumb.closeY + thumb.closeSize <= thumb.height
-                             && cardThumbHover.hovered
+                    x: thumb.closeSpot.x
+                    y: thumb.closeSpot.y
+                    visible: thumb.closeSpot.visible && cardThumbHover.hovered
                     address: String(thumb.topl.address)
                     windowTitle: String(thumb.topl.title || "window")
                   }

@@ -14,11 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install qmllint, jq and Node.js
-        run: pacman -Sy --noconfirm qt6-declarative jq nodejs
+      - name: Install qmllint, jq, Node.js and Lua
+        run: pacman -Sy --noconfirm qt6-declarative jq nodejs lua
 
-      - name: Close-control decision and input tests
-        run: node tests/close-controls.test.cjs
+      - name: Tests
+        run: node tests/run.cjs
 
       # The qs.* shell modules and Quickshell types only resolve inside
       # omarchy-shell, so import-dependent categories are disabled; this

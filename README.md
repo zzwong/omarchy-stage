@@ -103,7 +103,7 @@ hold-to-cycle's release-to-focus action.
 
 #### Close-controls QA
 
-Automated: `node tests/close-controls.test.cjs`, plus the lint workflow commands.
+Automated: `node tests/run.cjs`, plus the lint workflow commands.
 Manual checklist (requires an isolated compositor or disposable windows):
 
 - In carousel, grid, and cards, hover a preview and click `×`: Stage stays
