@@ -23,10 +23,17 @@ function focusWindowLua(value) {
     return addr ? 'hl.dsp.focus({ window = "address:' + addr + '" })' : ""
 }
 
+// A workspace id as Hyprland will take it: a positive integer and nothing
+// else, so no dispatch string ever interpolates something a title or a
+// settings file could have written. 0 means "not one".
+function workspaceId(value) {
+    var n = Number(value)
+    return Number.isFinite(n) && Math.floor(n) === n && n > 0 ? n : 0
+}
+
 function focusWorkspaceLua(id) {
-    var n = Number(id)
-    return Number.isFinite(n) && Math.floor(n) === n
-        ? 'hl.dsp.focus({ workspace = "' + n + '" })' : ""
+    var n = workspaceId(id)
+    return n ? 'hl.dsp.focus({ workspace = ' + n + ' })' : ""
 }
 
 // --- Close requests --------------------------------------------------------
@@ -239,20 +246,54 @@ function contrastColor(fill, a, b) {
 var DRAG_THRESHOLD = 12
 
 // `hl.dsp.window.move` with a selector naming a grouped window moves the
-// whole group, which is never what dragging one thumbnail asks for.
+// whole group, which is never what dragging one thumbnail asks for. The
+// refusal itself is in the move chunk, in the compositor; this is the
+// affordance, so a grouped thumbnail does not lift in the first place.
 function isGrouped(ipc) {
     return !!(ipc && ipc.grouped && ipc.grouped.length > 0)
 }
 
-// Moving is explicit and never follows: the compositor keeps its focus and
-// Stage stays open on the workspace the user is looking at. Only a validated
-// address and an integer workspace id reach the string.
-function moveLua(value, id) {
-    var addr = address(value)
-    var n = Number(id)
-    if (!addr || !Number.isFinite(n) || Math.floor(n) !== n || n <= 0) return ""
-    return 'hl.dsp.window.move({ window = "address:' + addr
-        + '", workspace = "' + n + '", follow = false })'
+// Moving a window to another workspace, as one Lua chunk Hyprland runs: it
+// resolves the window, checks it and moves it in one call, so nothing is
+// decided against state read before the dispatch. Both ways of asking -- a
+// dragged thumbnail and Ctrl+Shift+arrow -- build this one chunk, so the two
+// can never come to disagree about what a move is allowed to do.
+//
+// It refuses a window the compositor no longer has, one that is unmapped or
+// hidden, and one in a group, because `hl.dsp.window.move` takes the whole
+// group with it. Floating and fullscreen windows move perfectly well and are
+// not refused; the swap chunk is stricter because a swap rearranges a tiling.
+// A destination that exists must be on the source's monitor; one that does
+// not exist yet is created, which is what the grid's "+" slot asks for.
+//
+// `follow = false`: the compositor keeps its focus and Stage stays open on
+// the workspace the user is looking at. Returns "" for input it will not
+// build a chunk for; "move" or "noop" for what it did.
+function moveLua(value, id, create) {
+    var window = address(value)
+    var dest = workspaceId(id)
+    if (!window || !dest) return ""
+    var selector = '"address:' + window + '"'
+    return [
+        'function()',
+        '  local s = hl.get_window(' + selector + ')',
+        '  if s == nil or not s.mapped or s.hidden or s.group ~= nil',
+        '      or s.monitor == nil then return "noop" end',
+        '  local target = hl.get_workspace(' + dest + ')',
+        '  if target == nil then',
+        // Only the "+" slot may bring a workspace into being; a card whose
+        // workspace vanished under the pointer, or a keyboard move whose row
+        // entry is gone, is refused rather than recreated.
+        create ? '    -- the "+" slot: the move itself creates it'
+               : '    return "noop"',
+        '  elseif target.monitor == nil or target.monitor.id ~= s.monitor.id then',
+        '    return "noop"',
+        '  end',
+        '  hl.dispatch(hl.dsp.window.move({ window = ' + selector + ',',
+        '    workspace = ' + dest + ', follow = false }))',
+        '  return "move"',
+        'end'
+    ].join('\n')
 }
 
 // The workspace a drop lands on, or 0 for "do nothing". Re-decided from live

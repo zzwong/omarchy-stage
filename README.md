@@ -167,12 +167,21 @@ away, all do nothing. Selection is frozen while a window is being carried,
 and picking one up disarms hold-to-cycle's release-to-focus action — an
 ordinary click does not.
 
-**Grouped (tabbed) windows refuse to drag.** Hyprland's move dispatcher acts
-on the whole group when its selector names a member, and moving a group
-behind a single thumbnail would be a surprise; ungroup the window first.
-Dragging is also grid-only — not carousel slices, flat cards or title pills —
-and dropping a window on its own workspace never reorders or swaps panes,
-which is deliberately left to a later change.
+Every move is one Lua chunk Hyprland runs for itself: it resolves the window,
+checks it and moves it in one call, so nothing is decided against state read
+before the request went out. It refuses a window the compositor no longer
+has, one that is unmapped or hidden, one that is **grouped** — Hyprland's
+move dispatcher acts on the whole group when its selector names a member, and
+moving a group behind a single thumbnail would be a surprise — and a
+destination workspace that lives on another monitor. Floating and fullscreen
+windows move normally. A destination that no longer exists is refused rather
+than recreated; only a drop on the `+` slot may bring a workspace into being.
+One guard, in the compositor, for every move Stage asks for.
+
+Grouped windows also refuse to lift at all, so the gesture never starts on
+one; ungroup the window first. Dragging is grid-only — not carousel slices,
+flat cards or title pills — and dropping a window on its own workspace never
+reorders or swaps panes, which is deliberately left to a later change.
 
 #### Drag QA
 
@@ -191,8 +200,9 @@ Manual checklist (requires an isolated compositor or disposable windows):
   chip and the window moves, as anywhere else on that card.
 - Close the dragged window, and empty the destination workspace, with the
   pointer held still: the highlight goes away and the release does nothing.
-- Drag a grouped window: no proxy, no move. Drag with a close `×` visible:
-  the `×` still closes, and dragging from elsewhere on the thumbnail works.
+- Drag a grouped window: no proxy, and no move even if one is forced past the
+  affordance — the compositor refuses it. Drag with a close `×` visible: the
+  `×` still closes, and dragging from elsewhere on the thumbnail works.
 
 ## Settings
 

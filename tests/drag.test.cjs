@@ -3,30 +3,72 @@
 // and which thumbnail was picked up; what is left is decided here, so none of
 // this needs a compositor or a pointer.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
+const { StageLogic: L } = require('./load.cjs');
 
-const root = path.join(__dirname, '..');
-const L = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8'), L);
-
-// --- the dispatch string ---------------------------------------------------
-assert.equal(L.moveLua('abc', 3),
-             'hl.dsp.window.move({ window = "address:0xabc", workspace = "3", '
-             + 'follow = false })');
-assert.equal(L.moveLua('0xABC', '4'),
-             'hl.dsp.window.move({ window = "address:0xabc", workspace = "4", '
-             + 'follow = false })', 'ids are coerced to integers');
+// --- the move chunk --------------------------------------------------------
+// Only a validated handle and a positive integer workspace id are ever
+// interpolated; everything else the move depends on is read inside Hyprland.
+{
+  const move = L.moveLua('0xABC', '3');
+  assert.ok(move.startsWith('function()\n') && move.endsWith('\nend'),
+            'the chunk is one Lua expression');
+  assert.ok(move.includes('hl.get_window("address:0xabc")'), 'lowercased, prefixed');
+  assert.ok(move.includes('hl.get_workspace(3)'),
+            'the destination is looked up by integer id, not by name');
+  assert.ok(move.includes('follow = false'), 'the desktop workspace stays put');
+  assert.equal((move.match(/hl\.dispatch/g) || []).length, 1, 'one dispatch');
+  assert.equal(L.moveLua('abc', 3), L.moveLua('0xABC', '3'),
+               'the same window and workspace give the same chunk');
+  // What it deliberately does not look at: `movetoworkspacesilent` handles a
+  // floating or fullscreen window perfectly well, and only a swap needs a
+  // tiling to rearrange. Nothing in the chunk can refuse one.
+  for (const field of ['floating', 'fullscreen'])
+    assert.ok(!move.includes(field), 'a ' + field + ' source is not inspected');
+}
 for (const bad of ['', null, undefined, '0x', '0', 'xyz', 'abc" })',
                    'abc\nhl.dsp.exit({'])
   assert.equal(L.moveLua(bad, 3), '', 'rejects address ' + JSON.stringify(bad));
-for (const bad of [0, -1, 1.5, 'nope', '3" }) hl.dsp.exit({', null, NaN])
+for (const bad of [0, -1, 1.5, 'nope', '3" }) hl.dsp.exit({', null, NaN, {}])
   assert.equal(L.moveLua('abc', bad), '', 'rejects id ' + JSON.stringify(bad));
 
+// The chunk, executed against a mocked compositor: one guard decides what a
+// move may do, whether a thumbnail or a keyboard chord asked for it. Every
+// world below differs from the ordinary one in something the chunk reads.
+const moved = (source, workspace) =>
+  'move move{follow=false,window=address:' + source + ',workspace=' + workspace + '}';
+const scenarios = [
+  // The ordinary case, and the source's own state at the moment it runs.
+  ['tiled', '0xa', 3, moved('0xa', 3)],
+  ['gone', '0xa', 3, 'noop '],
+  ['unmapped', '0xa', 3, 'noop '],
+  ['hiddensource', '0xa', 3, 'noop '],
+  // A move takes the whole group with it, so a grouped window never moves.
+  ['grouped', '0xa', 3, 'noop '],
+  // A destination on another monitor is refused. One that does not exist is
+  // refused too, unless the "+" slot asked for it: then the move creates it.
+  ['foreignmonitor', '0xa', 3, 'noop '],
+  ['missing', '0xa', 3, 'noop '],
+  ['missing', '0xa', 3, moved('0xa', 3), true],
+];
+for (const [world, source, destination, expected, create] of scenarios) {
+  const lua = L.moveLua(source, destination, create);
+  assert.notEqual(lua, '', 'a chunk for ' + [world, source, destination]);
+  let out;
+  try {
+    out = execFileSync('lua', [path.join(__dirname, 'chunk.lua'), world],
+                       { input: lua, encoding: 'utf8' });
+  } catch (err) {
+    throw new Error('lua failed for ' + [world, source, destination].join(' ')
+                    + ': ' + (err.stderr || err.message));
+  }
+  assert.equal(out.trim(), expected.trim(), [world, source, destination].join(' '));
+}
+
 // --- grouped windows -------------------------------------------------------
-// Moving a group member moves the whole group, so a grouped thumbnail's
-// handler stays disabled and the drag never starts.
+// The chunk refuses a grouped window; this is the affordance that keeps its
+// thumbnail's handler disabled, so the drag never starts.
 assert.equal(L.isGrouped({ grouped: ['0xa', '0xb'] }), true);
 assert.equal(L.isGrouped({ grouped: [] }), false);
 assert.equal(L.isGrouped({}), false);
@@ -139,5 +181,5 @@ assert.equal(L.dragTransition(null, { type: 'release' }).action, 'none',
   assert.equal(JSON.stringify(s), before);
 }
 
-console.log('drag: the gesture\'s lifetime, where a drop lands, '
-            + 'and the dispatch string');
+console.log('drag: the gesture\'s lifetime, where a drop lands, and '
+            + scenarios.length + ' Lua move scenarios against a mocked compositor');

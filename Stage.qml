@@ -804,11 +804,14 @@ Item {
   }
 
   // Explicitly addressed, and `follow = false` so the compositor keeps its
-  // focus and Stage stays on the workspace being looked at. Hyprland
-  // re-resolves the selector when the dispatcher runs: a window that closed
-  // in the meantime is a null selector, never the active window.
-  function moveWindowToWorkspace(address, workspaceId) {
-    var lua = StageLogic.moveLua(address, workspaceId)
+  // focus and Stage stays on the workspace being looked at. Every check the
+  // move needs is inside the chunk, in the compositor, at the moment it runs:
+  // a window that was closed, unmapped or grouped since the thumbnail was
+  // picked up is a no-op there, never a fallback to whatever has focus.
+  // `create` is true only for a drop on the "+" slot: nothing else may bring
+  // a workspace into being.
+  function moveWindowToWorkspace(address, workspaceId, create) {
+    var lua = StageLogic.moveLua(address, workspaceId, create)
     if (!lua) return
     root.disarmCycle() // moving a window is not a step
     root.dispatch(lua)
