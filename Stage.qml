@@ -276,7 +276,23 @@ Item {
   // polls for them.
   Connections {
     target: Hyprland.workspaces
-    function onValuesChanged() { if (root.opened) root.rebuildWorkspaces(true) }
+    function onValuesChanged() {
+      if (root.opened) rebuildCoalesce.restart()
+    }
+  }
+
+  // Single-shot: restarted per trigger, fires once after the burst settles.
+  // Quickshell surfaces each newly created workspace in its own turn of the
+  // event loop — a `hyprctl --batch` creating two arrives as two signals
+  // about 9 ms apart — so `Qt.callLater`, which only collapses what is
+  // already queued in one turn, still ran a rebuild per workspace. A short
+  // debounce gives a monitor arriving with its workspaces, or a session
+  // restoring, the one rebuild it deserves.
+  Timer {
+    id: rebuildCoalesce
+    interval: 30
+    repeat: false
+    onTriggered: root.rebuildWorkspaces(true)
   }
 
   // The rebuilt list is filtered by monitor, and a workspace can change
@@ -291,7 +307,9 @@ Item {
     delegate: QtObject {
       required property var modelData
       readonly property var workspaceMonitor: modelData.monitor
-      onWorkspaceMonitorChanged: if (root.opened) root.rebuildWorkspaces(true)
+      onWorkspaceMonitorChanged: {
+        if (root.opened) rebuildCoalesce.restart()
+      }
     }
   }
 
@@ -319,10 +337,11 @@ Item {
     id: geometryRefresh
     interval: 60
     repeat: false
-    onTriggered: {
-      Hyprland.refreshToplevels()
-      Hyprland.refreshWorkspaces()
-    }
+    // Toplevels only: nothing here reads a workspace's `lastIpcObject`, and
+    // both the model's membership and each workspace's monitor come from the
+    // compositor's own events — Quickshell re-queries the workspaces itself
+    // when it sees one created.
+    onTriggered: Hyprland.refreshToplevels()
   }
 
   function rebuildWorkspaces(preserve) {
@@ -420,6 +439,7 @@ Item {
     root.cycled = false
     holdWatchdog.stop()
     geometryRefresh.stop()
+    rebuildCoalesce.stop()
   }
 
   function dismiss() {
@@ -438,8 +458,15 @@ Item {
   // reply to parse here: it logs any answer but "ok" as "Dispatch request
   // … failed with error …" on its own. `dismiss()` only hides the overlay
   // (the plugin is keepLoaded), so a request outlives it.
+  //
+  // Several Hyprland dispatchers re-tile while announcing nothing at all, so
+  // a request Stage sends itself gets the same coalesced refresh the
+  // compositor's own events get. Requests on one socket are answered in
+  // order, so the geometry the timer reads is the geometry this produced.
   function dispatch(lua) {
-    if (lua) Hyprland.dispatch(lua)
+    if (!lua) return
+    Hyprland.dispatch(lua)
+    if (root.opened) geometryRefresh.restart()
   }
 
   // `hl.dsp.*` exists only under a Lua config (Omarchy's default); under a

@@ -24,6 +24,16 @@ function functionBody(source, name) {
 // Reconciliation is event-driven; a polling timer would be a regression.
 assert.ok(!/repeat:\s*true/.test(qml), 'no repeating Timer in Stage.qml');
 
+// Quickshell surfaces each newly created workspace in its own turn of the
+// event loop, so Qt.callLater -- which only collapses what one turn already
+// queued -- ran a rebuild per workspace of a batch. A short debounce, one
+// timer restarted by both triggers, is what actually coalesces a burst.
+assert.ok(!/Qt\.callLater\(\s*root\.rebuildWorkspaces/.test(qml),
+          'rebuilds are coalesced by a debounce timer, not by Qt.callLater');
+assert.ok(/id:\s*rebuildCoalesce/.test(qml), 'the rebuild debounce timer exists');
+assert.equal((qml.match(/rebuildCoalesce\.restart\(\)/g) || []).length, 2,
+             'both rebuild triggers restart the one debounce timer');
+
 // An intermediate value notifies a selection nobody asked for, and the
 // derived pane/workspace bindings are real observers: the rebuild assigns once.
 const rebuild = functionBody(qml, 'rebuildWorkspaces');
@@ -69,4 +79,4 @@ assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: no polling timer, one selectedIndex assignment, socket dispatch, model-backed Repeaters');
+console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, model-backed Repeaters');
