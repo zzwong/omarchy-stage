@@ -297,9 +297,15 @@ Item {
     values: root.workspaceList
   }
 
+  // The workspace ids Stage is showing, in the order it shows them: the
+  // focused monitor's, which is not the compositor's whole list. The "+"
+  // card's caption and the workspace a drop on it creates both count from
+  // this one list.
+  readonly property var shownIds:
+    workspaceList.map(function(w) { return w.id })
+
   function nextWorkspaceId() {
-    return StageLogic.nextWorkspaceId(
-      root.workspaceList.map(function(w) { return w.id }))
+    return StageLogic.nextWorkspaceId(root.shownIds)
   }
 
   // Membership changes arrive as a signal from the model itself; nothing
@@ -438,6 +444,9 @@ Item {
   }
 
   function cycleStep(delta) {
+    // A step arriving mid-drag would move the selection out from under the
+    // thumbnail being carried; the drag already disarmed the commit.
+    if (root.dragging) return
     root.cycled = true
     root.kbdPriority = true
     root.advance(delta)
@@ -680,6 +689,134 @@ Item {
     else root.activateSelected()
   }
 
+  // --- Drag: move a window to another workspace -------------------------
+  // Dragging a grid thumbnail onto another workspace card moves that one
+  // window there. This is movement inside the overlay — a Qt Quick pointer
+  // grab, and one Hyprland dispatch at the end of it — not a native Wayland
+  // window drag, and it never follows the window.
+  //
+  // The gesture is a DragHandler on each grid thumbnail (see WsSlab), so Qt
+  // owns the threshold, the grab and the question of which window was picked
+  // up: the handler takes the grab off the card's own MouseAreas only once
+  // the pointer has travelled far enough to mean a drag, and a press that
+  // does not is still their click. Stage decides only what is dragged where.
+
+  // The gesture's lifetime is one pure transition in StageLogic; these are
+  // what the bindings that draw it read.
+  property var dragState: StageLogic.dragIdle()
+  readonly property bool dragging: dragState.phase === "dragging"
+  // Pointer position in scene coordinates, from the handler's centroid.
+  property point dragPoint: Qt.point(0, 0)
+
+  // The dragged window, still open and still on the workspace it was picked
+  // up from. A binding over the live model, so closing or moving the window
+  // elsewhere is noticed without waiting for the pointer.
+  readonly property bool dragSourceLive: {
+    if (!dragState.address) return false
+    var values = Hyprland.toplevels.values
+    for (var i = 0; i < values.length; i++) {
+      if (StageLogic.address(values[i].address) !== dragState.address) continue
+      return !!values[i].workspace && values[i].workspace.id === dragState.workspace
+    }
+    return false
+  }
+  // Deferred: ending the gesture writes dragState, which the binding above
+  // reads, and writing it from inside that binding's own notification is a
+  // loop. By the time this runs the window really is gone.
+  onDragSourceLiveChanged: if (!root.dragSourceLive) Qt.callLater(root.dropGoneSource)
+  function dropGoneSource() {
+    if (root.dragging && !root.dragSourceLive) root.endDrag("sourceGone")
+  }
+
+  // The card under the pointer, and the workspace a release would move the
+  // window to — 0 when nothing would happen. Derived rather than latched:
+  // both read Hyprland's live models, so a destination that is destroyed (or
+  // a source that goes away) re-decides the highlight with the pointer
+  // standing still, and the release re-decides it once more.
+  property var dragHover: null
+  readonly property int dragDestination: dragging && dragHover
+    ? StageLogic.dropDecision({
+        hit: dragHover, dragWorkspace: dragState.workspace,
+        sourceLive: dragSourceLive, shownIds: root.shownIds,
+        workspaces: Hyprland.workspaces.values })
+    : 0
+
+  // One condition for the grid view, its thumbnails' handlers and the
+  // gesture's lifetime, so they cannot drift apart: a drag belongs to the
+  // grid and cannot outlive it. The overlay closing, the view zooming out or
+  // the style changing ends it, and takes the handler with it.
+  readonly property bool gridActive:
+    opened && uiStyle === "picker" && viewMode === "grid"
+  onGridActiveChanged: if (!root.gridActive) root.endDrag("cancel")
+
+  function endDrag(reason) {
+    root.dragState = StageLogic.dragTransition(root.dragState,
+                                               { type: reason }).state
+    root.dragHover = null
+  }
+
+  // The card under a scene point: the grid's own lookup, or nothing when
+  // there is no grid. Cards only — a drop lands on a workspace, never on one
+  // of the windows drawn inside it.
+  function cardAt(scenePoint) {
+    return gridLoader.item ? gridLoader.item.cardAt(scenePoint) : null
+  }
+
+  // A thumbnail has been dragged past the threshold. What is being carried
+  // comes from the delegate that was grabbed, so nothing has to be hit-tested
+  // to find out what the pointer picked up.
+  function beginDrag(topl, workspace, scenePoint) {
+    root.dragState = StageLogic.dragTransition(root.dragState, {
+      type: "start", address: topl.address, title: topl.title || "Window",
+      workspace: workspace ? workspace.id : 0 }).state
+    root.disarmCycle() // carrying a window off is not a step
+    root.dragHover = null
+    root.aimDrag(scenePoint)
+  }
+
+  // The pointer moved while carrying one: the proxy follows it and the card
+  // under it becomes the drop target. Hit testing is card-level and the hit
+  // is only rewritten when it names a different card — every write re-runs
+  // dropDecision and every card's wash and stroke bindings.
+  function aimDrag(scenePoint) {
+    if (!root.dragging) return
+    root.dragPoint = scenePoint
+    var hit = root.cardAt(scenePoint)
+    if (hit !== root.dragHover && !StageLogic.sameCard(hit, root.dragHover))
+      root.dragHover = hit
+  }
+
+  // The button came up. The destination is the one the highlight was already
+  // promising, and only if the release really is over the card it named: the
+  // grid re-lays out when workspaces come and go, and whatever slid under a
+  // standing pointer was never aimed at.
+  function commitDrag(scenePoint) {
+    var carried = root.dragState
+    var hit = root.cardAt(scenePoint)
+    var destination = StageLogic.sameCard(hit, root.dragHover)
+      ? root.dragDestination : 0
+    var create = !!hit && hit.id === 0
+    var done = StageLogic.dragTransition(carried, { type: "release" })
+    root.dragState = done.state
+    root.dragHover = null
+    if (done.action === "move" && destination > 0)
+      root.moveWindowToWorkspace(carried.address, destination, create)
+  }
+
+  // Explicitly addressed, and `follow = false` so the compositor keeps its
+  // focus and Stage stays on the workspace being looked at. Every check the
+  // move needs is inside the chunk, in the compositor, at the moment it runs:
+  // a window that was closed, unmapped or grouped since the thumbnail was
+  // picked up is a no-op there, never a fallback to whatever has focus.
+  // `create` is true only for a drop on the "+" slot: nothing else may bring
+  // a workspace into being.
+  function moveWindowToWorkspace(address, workspaceId, create) {
+    var lua = StageLogic.moveLua(address, workspaceId, create)
+    if (!lua) return
+    root.disarmCycle() // moving a window is not a step
+    root.dispatch(lua)
+  }
+
   // Skewed workspace slab: the one visual unit shared by the carousel, the
   // grid, and the "new workspace" slot (workspace: null).
   component WsSlab: Item {
@@ -693,6 +830,24 @@ Item {
     property real dimOpacity: 0.42
     // Address of the pane-mode highlighted window, "" when off.
     property string highlightAddress: ""
+
+    // The card a drop would land on right now.
+    readonly property bool dropTarget: root.dragDestination > 0
+                                       && !!root.dragHover
+                                       && root.dragHover.slab === slab
+
+    // This card under a scene point, or null when the point misses it: the
+    // skewed mask decides, not the bounding box. A drop lands on the card as
+    // a whole — the chip and the thumbnails drawn on it are part of it —
+    // so nothing inside is hit-tested, and nothing per-window is read.
+    function cardAt(scenePoint) {
+      var p = slab.mapFromItem(null, scenePoint.x, scenePoint.y)
+      var left = slab.skew * (1 - p.y / slab.height)
+      if (p.y < 0 || p.y > slab.height || p.x < left
+          || p.x > slab.width - slab.skew + left) return null
+      return { id: slab.workspace ? slab.workspace.id : 0,
+               workspace: slab.workspace, slab: slab }
+    }
 
     signal pressed()
     signal activated()
@@ -842,8 +997,10 @@ Item {
             // intersection instead: the same corner wherever that corner is
             // fully visible, pushed in by the overscan fringe and the skew
             // allowance where it is not.
-            readonly property bool closeArmed:
-              slab.selected && (thumbHover.hovered || thumb.paneSelected)
+            // The pointer grab keeps the thumbnail "hovered" for the whole
+            // gesture; a drag is not the time to offer a close button.
+            readonly property bool closeArmed: slab.selected && !root.dragging
+              && (thumbHover.hovered || thumb.paneSelected)
             readonly property var closeSpot:
               root.closeSpotFor(closeArmed, thumb, wsContent.x, wsContent.y,
                                 slab, slab.skew)
@@ -856,6 +1013,28 @@ Item {
               visible: thumb.closeSpot.visible
               address: String(thumb.topl.address)
               windowTitle: String(thumb.topl.title || "window")
+            }
+
+            // Carry this window to another workspace card. A handler rather
+            // than a grab over the grid: Qt gives it the exclusive grab —
+            // cancelling the click the card's own MouseAreas were tracking —
+            // only once the pointer has travelled DRAG_THRESHOLD, so every
+            // click path is exactly the one that was there before.
+            //
+            // Grid only: no other view's slabs exist while the grid does. A
+            // grouped window never lifts, because `hl.dsp.window.move` would
+            // take its whole group along; the chunk refuses it as well.
+            DragHandler {
+              target: null
+              dragThreshold: StageLogic.DRAG_THRESHOLD
+              enabled: root.gridActive && !StageLogic.isGrouped(thumb.ipc)
+              onActiveChanged: {
+                if (active)
+                  root.beginDrag(thumb.topl, slab.workspace,
+                                 centroid.scenePosition)
+                else root.commitDrag(centroid.scenePosition)
+              }
+              onCentroidChanged: root.aimDrag(centroid.scenePosition)
             }
           }
         }
@@ -876,6 +1055,15 @@ Item {
           color: Util.alpha(Color.background, slab.selected ? 0 : slab.dimOpacity)
           Behavior on color { ColorAnimation { duration: 170 } }
         }
+
+        // A valid drop destination washes the whole card in translucent
+        // accent: the selected card is already outlined in the same colour,
+        // so a difference in stroke width alone is easy to miss.
+        Rectangle {
+          anchors.fill: parent
+          color: Util.alpha(root.selectedBorder, slab.dropTarget ? 0.18 : 0)
+          Behavior on color { ColorAnimation { duration: 120 } }
+        }
       }
     }
 
@@ -886,8 +1074,10 @@ Item {
       preferredRendererType: Shape.CurveRenderer
       ShapePath {
         fillColor: "transparent"
-        strokeColor: slab.selected ? root.pickerSelectedBorder : root.pickerUnselectedBorder
-        strokeWidth: slab.selected ? 3 : 1
+        strokeColor: slab.dropTarget ? root.selectedBorder
+                     : slab.selected ? root.pickerSelectedBorder
+                                     : root.pickerUnselectedBorder
+        strokeWidth: slab.dropTarget ? 6 : slab.selected ? 3 : 1
         startX: slab.topLeft; startY: 0
         PathLine { x: slab.topRight; y: 0 }
         PathLine { x: slab.bottomRight; y: slab.height }
@@ -955,8 +1145,15 @@ Item {
       onKpChanged: { refX = -1; refY = -1 }
       onExited: { refX = -1; refY = -1 }
 
+      // A drag's travel is not hover motion: start measuring again when one
+      // ends, so releasing a drag over a card does not also select it.
+      readonly property bool held: root.dragging
+      onHeldChanged: { refX = -1; refY = -1 }
+
       onPositionChanged: function(mouse) {
-        if (!slab.hoverSelect) return
+        // Selection is frozen while a window is being carried: the pointer
+        // crossing other cards is aiming the drag, not choosing a workspace.
+        if (!slab.hoverSelect || root.dragging) return
         if (!root.kbdPriority) { slab.pressed(); return }
         if (refX < 0) { refX = mouse.x; refY = mouse.y; return }
         if (Math.abs(mouse.x - refX) + Math.abs(mouse.y - refY) > 24) {
@@ -1023,6 +1220,16 @@ Item {
       }
 
       function navigate(event) {
+        // A drag owns the keyboard: Escape cancels the gesture and nothing
+        // navigates out from under it. The overlay stays open, so the next
+        // Escape is the one that dismisses.
+        if (root.dragging) {
+          if (event.key === Qt.Key_Escape && !event.isAutoRepeat)
+            root.endDrag("escape")
+          event.accepted = true
+          return
+        }
+
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
@@ -1041,7 +1248,9 @@ Item {
         }
 
         if (event.key === Qt.Key_Escape) {
-          root.dismiss()
+          // Autorepeat excluded: holding Escape to cancel a drag must not
+          // then dismiss on the same press.
+          if (!event.isAutoRepeat) root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_Up) {
           root.kbdPriority = true
@@ -1188,7 +1397,8 @@ Item {
     // "picker" style, grid view: every workspace laid out responsively.
     // ------------------------------------------------------------------
     Loader {
-      active: root.opened && root.uiStyle === "picker" && root.viewMode === "grid"
+      id: gridLoader
+      active: root.gridActive
       anchors.fill: parent
 
       sourceComponent: Item {
@@ -1197,6 +1407,20 @@ Item {
         readonly property real cardW: root.gridFit.w
         readonly property real cardH: root.gridFit.w / root.monAspect
 
+        // The card under a scene point. Paint order decides overlaps: the
+        // selected card is drawn above its siblings, scaled fringe included.
+        function cardAt(scenePoint) {
+          var selected = gridSlabs.itemAt(root.selectedIndex)
+          var hit = selected ? selected.cardAt(scenePoint) : null
+          if (hit) return hit
+          for (var i = gridSlabs.count - 1; i >= 0; i--) {
+            if (i === root.selectedIndex) continue
+            hit = gridSlabs.itemAt(i).cardAt(scenePoint)
+            if (hit) return hit
+          }
+          return null
+        }
+
         Grid {
           anchors.centerIn: parent
           columns: root.gridCols
@@ -1204,6 +1428,7 @@ Item {
           rowSpacing: root.gridGap
 
           Repeater {
+            id: gridSlabs
             // The slot model. See the carousel Repeater.
             model: slotModel
 
@@ -1230,6 +1455,39 @@ Item {
             }
           }
         }
+      }
+    }
+
+    // What is being dragged follows the pointer as a label: a second live
+    // capture of the same window would cost another screencopy stream, and
+    // the thumbnail it came from is still on screen.
+    Rectangle {
+      z: 1001
+      visible: root.dragging
+      // The handler reports its centroid in scene coordinates.
+      readonly property point at:
+        parent.mapFromItem(null, root.dragPoint.x, root.dragPoint.y)
+      x: Math.min(at.x + Style.space(18), panel.width - width)
+      y: Math.min(at.y + Style.space(18), panel.height - height)
+      width: proxyLabel.width + Style.space(28)
+      height: proxyLabel.implicitHeight + Style.space(18)
+      radius: root.cornerRadius
+      color: root.background
+      border.width: 2
+      // The same accent the destination card takes, so the pointer says
+      // whether a release would do anything.
+      border.color: root.dragDestination > 0 ? root.selectedBorder : root.border
+
+      Text {
+        id: proxyLabel
+        anchors.centerIn: parent
+        width: Math.min(implicitWidth, panel.width * 0.28)
+        text: root.dragState.title
+        textFormat: Text.PlainText
+        elide: Text.ElideRight
+        color: root.foreground
+        font.family: Style.font.menuFamily
+        font.pixelSize: Style.font.subtitle
       }
     }
 

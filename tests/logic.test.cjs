@@ -1,13 +1,7 @@
 // Direct tests of StageLogic.js: the file Stage.qml imports is the file
 // loaded here, verbatim, in a bare context (no QML, no compositor).
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-
-const root = path.join(__dirname, '..');
-const L = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8'), L);
+const { StageLogic: L } = require('./load.cjs');
 
 // --- addresses and dispatch strings ---------------------------------------
 for (const bad of ['', null, undefined, '0x', '0', '0000', '0x000', 'xyz',
@@ -18,10 +12,15 @@ assert.equal(L.address('abc'), '0xabc', 'Quickshell omits the 0x prefix');
 assert.equal(L.closeLua('abc'), 'hl.dsp.window.close({ window = "address:0xabc" })');
 assert.equal(L.focusWindowLua('0xABC'), 'hl.dsp.focus({ window = "address:0xabc" })');
 assert.equal(L.focusWindowLua('nope'), '');
-assert.equal(L.focusWorkspaceLua(3), 'hl.dsp.focus({ workspace = "3" })');
-assert.equal(L.focusWorkspaceLua('4'), 'hl.dsp.focus({ workspace = "4" })');
+assert.equal(L.focusWorkspaceLua(3), 'hl.dsp.focus({ workspace = 3 })');
+assert.equal(L.focusWorkspaceLua('4'), 'hl.dsp.focus({ workspace = 4 })');
 assert.equal(L.focusWorkspaceLua('1" }) hl.dsp.exit({'), '', 'rejects injection');
 assert.equal(L.focusWorkspaceLua(1.5), '');
+// One validator behind every dispatch string that names a workspace.
+assert.equal(L.workspaceId('7'), 7);
+for (const bad of [0, -1, 1.5, '', null, NaN, '3;', {}])
+  assert.equal(L.workspaceId(bad), 0, 'rejects ' + JSON.stringify(bad));
+assert.equal(L.focusWorkspaceLua(0), '', 'there is no workspace 0');
 
 // --- close requests --------------------------------------------------------
 assert.equal(L.canRequest('0xa', ['0xa'], {}, 100), true);
