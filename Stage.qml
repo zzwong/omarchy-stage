@@ -566,26 +566,63 @@ Item {
       size: root.closeControlSize, pad: root.closeControlPad })
   }
 
-  component CloseControl: Rectangle {
+  // The close control is a chip in the picker's own language: an accent
+  // parallelogram sharing the slabs' shear, like the workspace number chip,
+  // with a drawn cross (the theme font's multiplication sign varies too much
+  // in weight and centring to be the glyph). On a rounded title pill the chip
+  // would fight the pill, so `inline` drops it and keeps only the cross,
+  // dimmed until hovered. A flat card passes `shear: 0` for a plain chip.
+  component CloseControl: Item {
     id: closeControl
     required property string address
     property string windowTitle: "window"
+    property bool inline: false
+    property real shear: root.skewSlope
     readonly property bool hovered: closeHover.hovered
     width: root.closeControlSize
     height: root.closeControlSize
-    radius: Style.space(6)
-    color: closeControl.hovered ? root.selectedBorder : root.background
-    border.color: closeControl.hovered ? root.selectedBorder : root.border
-    readonly property color glyphColor:
-      StageLogic.contrastColor(closeControl.color, root.foreground, root.background)
+    readonly property real sk: height * shear
+    property color ink: inline
+      ? Util.alpha(root.pickerText, hovered ? 1 : 0.6)
+      : StageLogic.contrastColor(root.pickerSelectedBorder, root.foreground, root.background)
+    Behavior on ink { ColorAnimation { duration: 170 } }
     Accessible.role: Accessible.Button
     Accessible.name: "Close " + windowTitle
     Accessible.onPressAction: root.requestWindowClose(closeControl.address)
-    Text {
+    Shape {
+      visible: !closeControl.inline
+      anchors.fill: parent
+      antialiasing: true
+      preferredRendererType: Shape.CurveRenderer
+      opacity: closeControl.hovered ? 1 : 0.82
+      Behavior on opacity { NumberAnimation { duration: 170 } }
+      ShapePath {
+        fillColor: root.pickerSelectedBorder
+        strokeColor: "transparent"
+        startX: closeControl.sk; startY: 0
+        PathLine { x: closeControl.width; y: 0 }
+        PathLine { x: closeControl.width - closeControl.sk; y: closeControl.height }
+        PathLine { x: 0; y: closeControl.height }
+        PathLine { x: closeControl.sk; y: 0 }
+      }
+    }
+    Shape {
+      id: closeCross
       anchors.centerIn: parent
-      text: "×"
-      color: closeControl.glyphColor
-      font.pixelSize: Style.font.iconLarge
+      width: Style.space(8)
+      height: width
+      antialiasing: true
+      preferredRendererType: Shape.CurveRenderer
+      ShapePath {
+        strokeColor: closeControl.ink
+        strokeWidth: Math.max(1, Style.space(1))
+        capStyle: ShapePath.RoundCap
+        fillColor: "transparent"
+        startX: 0; startY: 0
+        PathLine { x: closeCross.width; y: closeCross.height }
+        PathMove { x: 0; y: closeCross.height }
+        PathLine { x: closeCross.width; y: 0 }
+      }
     }
     // Qt delivers hover to the frontmost item that accepts it, so whatever
     // draws this control takes the pointer away from anything underneath —
@@ -1463,6 +1500,7 @@ Item {
               // Always discoverable, including when the preview is too small.
               CloseControl {
                 id: pillClose
+                inline: true
                 anchors.verticalCenter: parent.verticalCenter
                 address: String(pill.topl.address)
                 windowTitle: pill.label
@@ -1620,6 +1658,7 @@ Item {
                     root.closeSpotFor(cardThumbHover.hovered, thumb, 0, 0, card, 0)
 
                   CloseControl {
+                    shear: 0 // a flat card has no slant to match
                     x: thumb.closeSpot.x
                     y: thumb.closeSpot.y
                     visible: thumb.closeSpot.visible
