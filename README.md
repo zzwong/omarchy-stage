@@ -67,6 +67,8 @@ Then drop the keybind or gestures you added.
 | click a slice | select it |
 | click the expanded preview | jump — window thumbnails are individually clickable |
 | `X` (no modifiers, pane mode only) | request graceful close of the selected window; hold/repeat never closes another pane |
+| `Shift` + `←` `→` `↑` `↓` (pane mode only) | swap the selected window with its tiled neighbour in that direction |
+| `Ctrl-Shift` + `←` `→` (pane mode only) | send the selected window to the previous/next workspace in the row, without leaving Stage |
 | `×` on a thumbnail / title pill | request graceful close without leaving Stage |
 | the `+` slot at the end | create the next workspace |
 | `Esc` / click outside | close |
@@ -203,6 +205,80 @@ Manual checklist (requires an isolated compositor or disposable windows):
 - Drag a grouped window: no proxy, and no move even if one is forced past the
   affordance — the compositor refuses it. Drag with a close `×` visible: the
   `×` still closes, and dragging from elsewhere on the thumbnail works.
+
+### Moving windows
+
+In pane mode, `Shift` + an arrow swaps the selected window with the tiled
+window next to it in that direction, and `Ctrl-Shift` + `←`/`→` sends it to
+the workspace next to this one in the row Stage is showing. Stage stays open
+and the selection stays on the window: after a swap the highlight follows it
+into its new place, and after a move Stage scrolls to the workspace it landed
+on. The desktop's own workspace does not change — nothing is focused and
+nothing is switched to until you press `Enter`.
+
+Destinations are the neighbouring entries of the row, not the next workspace
+number: with workspaces 1, 3 and 7 on screen the window goes 1 → 3 → 7 and
+back. There is no wrapping at either end and no special workspaces; the row
+has to already contain the destination, so a keyboard move never reaches a
+workspace the `+` slot has not made. Swaps pick the nearest window whose
+centre lies in that direction and whose span overlaps the selected window's,
+on the same workspace and monitor, so a window that only touches it
+diagonally is not a neighbour and an edge is simply a no-op.
+
+A **swap** rearranges a tiling, so both windows have to be ordinary tiled
+ones: floating, grouped, hidden and fullscreen windows are left alone, and so
+is a window that became one of those since Stage drew it. A **move** only has
+to get the window out, so it is the same request a dragged thumbnail makes,
+with the same guard: it refuses a window that has gone, is unmapped, is
+hidden or is grouped, and a destination on another monitor, but floating and
+fullscreen windows move normally.
+
+Each edit is a **single** Hyprland Lua dispatch that resolves the window,
+chooses the neighbour and swaps — or moves — inside the compositor, so
+nothing is ever decided against geometry that has already changed. There is
+no helper process, no polling, no busy state and no Python dependency;
+Hyprland answers requests on one socket in order, so a repeat cannot overtake
+the edit before it. Hyprland warps the hardware cursor onto a swapped window,
+which would leave Stage's hover-select pointing somewhere nobody aimed, so
+the swap puts the pointer back where it was. `Esc` still dismisses, and
+editing disarms hold-to-cycle's release-to-focus action.
+
+**A move takes the selection with it, and only its own.** Stage knows the
+destination when it sends the request, so it scrolls there and keeps the pane
+zoom on the same window immediately, rather than trying to notice the window
+arrive: Quickshell takes a moved window out of its old workspace before it
+puts it in the new one, and a workspace the move empties is destroyed in the
+same breath, so a selection inferred from that lands on a sibling. A move
+made from outside Stage is not followed — the selection hands over to the
+window that stood next to it, as it does for a close.
+
+#### Moving-windows QA
+
+Automated: `node tests/run.cjs` (the `routeKey` matrix for presses and
+releases, the move destinations, and the generated Lua executed against a
+mocked compositor in `tests/chunk.lua`), plus the lint workflow commands.
+Manual checklist (isolated compositor or disposable windows):
+
+- In a 2×2 tiling, `Shift` + each arrow swaps with the right neighbour and the
+  highlight stays on the same window as its pane index moves.
+- Every outer edge, and a diagonal-only neighbour, are no-ops: no geometry
+  change, nothing lands on another workspace or monitor.
+- With workspaces 1, 3, 7: `Ctrl-Shift-→` walks 1 → 3 → 7 and `Ctrl-Shift-←`
+  back, creating no 2/4/8 and never wrapping. Stage stays open, the selection
+  follows, the desktop's workspace does not move, and emptying a workspace
+  removes it from the row without warnings.
+- Floating, grouped and fullscreen selections do not swap. Grouped windows do
+  not move either; floating and fullscreen ones do.
+- Hold `Ctrl-Shift-→` from the first workspace: the same window travels along
+  the row, never a sibling, and the pane zoom is on it at every stop.
+- After each swap the pointer is where it was before the key was pressed.
+- Hold an editing chord and alternate chords quickly: no stale edits.
+- `Ctrl`/`Alt` + arrow neither edit nor navigate; ordinary arrows,
+  `Tab`/`Shift-Tab`, `Enter`, `↑`/`↓` zoom and the keypad's arrows and `Enter`
+  still work — including in `cycle` mode, with `Super` held down the whole
+  time.
+- In `keybindMode: "cycle"`, an edit disarms the commit and a later step
+  re-arms it.
 
 ## Settings
 
