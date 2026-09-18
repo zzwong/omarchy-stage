@@ -7,6 +7,7 @@ import Quickshell.Widgets
 import Quickshell.Services.Mpris
 import Quickshell.Services.Pipewire
 import QtQuick
+import "StageLogic.js" as StageLogic
 import QtQuick.Effects
 import QtQuick.Shapes
 import qs.Commons
@@ -186,44 +187,197 @@ Item {
 
   property var workspaceList: []
 
-  // Pane mode: a third zoom level inside the carousel's expanded preview.
-  // -1 = off; otherwise an index into selectedPanes.
-  property int paneIndex: -1
-  onSelectedIndexChanged: paneIndex = -1
-  onViewModeChanged: paneIndex = -1
+  // Workspace selection is owned by the workspace's id; selectedIndex is
+  // only where that workspace currently sits in the list, which the
+  // compositor may change under us.
+  //
+  // Everything about the selection derives from this one property rather
+  // than from (workspaceList, selectedIndex) separately. A rebuild assigns
+  // those two in sequence, and QML re-evaluates the bindings that depend on
+  // them in an order of its own choosing; with a single common source, every
+  // derived value read from within a handler belongs to the same workspace.
+  readonly property var selectedWorkspace:
+    (selectedIndex >= 0 && selectedIndex < workspaceList.length)
+      ? workspaceList[selectedIndex] : null
+  readonly property int selectedWorkspaceId:
+    selectedWorkspace ? selectedWorkspace.id : -1
 
-  // Windows of the selected workspace in left-to-right, top-to-bottom order.
-  readonly property var selectedPanes: {
-    if (selectedIndex < 0 || selectedIndex >= workspaceList.length) return []
-    var vals = workspaceList[selectedIndex].toplevels.values
-    var arr = []
-    for (var i = 0; i < vals.length; i++) arr.push(vals[i])
-    arr.sort(function(a, b) {
-      var ia = a.lastIpcObject, ib = b.lastIpcObject
-      var ax = ia && ia.at ? ia.at[0] : 0, bx = ib && ib.at ? ib.at[0] : 0
-      if (ax !== bx) return ax - bx
-      var ay = ia && ia.at ? ia.at[1] : 0, by = ib && ib.at ? ib.at[1] : 0
-      return ay - by
-    })
-    return arr
+  // Every workspace selection made by input goes through here: leaving a
+  // workspace leaves its pane zoom behind. Without this, returning to a
+  // workspace later would silently re-enter pane mode on an address the user
+  // last chose several workspaces ago -- or, after a close handed the
+  // selection on, on a window they never chose at all.
+  function selectWorkspace(index) {
+    if (index !== root.selectedIndex) root.selectPane(-1)
+    root.selectedIndex = index
   }
 
+  // Pane mode: a third zoom level inside the carousel's expanded preview.
+  // The selected window's address owns the selection and paneIndex is
+  // derived from it, scoped to the workspace the zoom was entered on. A
+  // re-tile, a reorder or a workspace rebuild therefore cannot move the
+  // selection onto a different window, and no reconciliation flag has to
+  // guard the property writes a rebuild makes.
+  property string selectedPaneAddress: ""
+  property int paneWorkspaceId: -1
+  readonly property int paneIndex:
+    (selectedWorkspace && selectedWorkspace.id === paneWorkspaceId)
+      ? StageLogic.paneIndexFor(selectedPanes, selectedPaneAddress) : -1
+
+  // Every pane selection goes through here; -1 leaves pane mode.
+  function selectPane(index) {
+    root.paneWorkspaceId = root.selectedWorkspace ? root.selectedWorkspace.id : -1
+    root.selectedPaneAddress = index >= 0 && index < root.selectedPanes.length
+      ? String(root.selectedPanes[index].address) : ""
+  }
+
+  // When the selected window goes away — closed here, or moved off this
+  // workspace — hand pane mode to the window that stood next to it instead of
+  // dropping the user out a zoom level. The hand-off follows a window, not a
+  // slot, so it needs the order as it was before the change.
+  property var paneAddresses: []
+  onSelectedPanesChanged: {
+    // Scope and membership are both read off `selectedWorkspace`, which
+    // `selectedPanes` was just derived from, so this can never hand pane mode
+    // to a window on a workspace that is only half-selected.
+    var ws = root.selectedWorkspace
+    var addr = root.selectedPaneAddress
+    var addresses = root.selectedPanes.map(function(p) { return String(p.address) })
+    var previous = root.paneAddresses
+    root.paneAddresses = addresses
+    if (!addr || !ws || ws.id !== root.paneWorkspaceId) return
+    if (addresses.indexOf(addr) >= 0) return // still there, only re-tiled
+    root.selectPane(StageLogic.neighborAfterClose(previous, addresses, addr))
+  }
+  onViewModeChanged: root.selectPane(-1)
+
+  // Windows of the selected workspace in column-major order (left to right,
+  // top to bottom within a column). A workspace the compositor has destroyed
+  // — the last window moved off it — can still be referenced here for the
+  // binding pass before the rebuild: the QObject is gone, so reading
+  // `toplevels` gives undefined.
+  readonly property var selectedPanes:
+    (selectedWorkspace && selectedWorkspace.toplevels)
+      ? StageLogic.sortPanes(selectedWorkspace.toplevels.values) : []
+
   readonly property string paneAddress:
-    (paneIndex >= 0 && paneIndex < selectedPanes.length)
-    ? String(selectedPanes[paneIndex].address) : ""
+    paneIndex >= 0 ? root.selectedPaneAddress : ""
 
   // One slot per workspace plus the trailing "new workspace" slot.
   readonly property int slotCount: workspaceList.length + 1
   readonly property bool plusSelected: selectedIndex === workspaceList.length
 
-  function nextWorkspaceId() {
-    var max = 0
-    for (var i = 0; i < workspaceList.length; i++)
-      if (workspaceList[i].id > max) max = workspaceList[i].id
-    return max + 1
+  // The "+" slot's stand-in in the slot model. One instance for the life of
+  // the overlay, so the model sees the same object on every rebuild and the
+  // slot at the end of the row is never the one that got recreated. A slab
+  // renders it as the "+" card by the same `workspace: null` convention the
+  // component already uses.
+  readonly property QtObject plusSlot: QtObject {}
+
+  // Slot delegates are keyed by workspace identity, not by position. A
+  // rebuild reassigns `workspaceList`, and an `int` model (or a plain array)
+  // would then hand every slab after an insertion a different workspace:
+  // its thumbnails are bound to `workspace.toplevels`, so they are recreated
+  // and every live capture restarts on cards nothing happened to.
+  // ScriptModel diffs the replaced array and reports only the inserts and
+  // removes that really happened, so the untouched slabs survive.
+  ScriptModel {
+    id: slotModel
+    // Identity, not the default structural compare: two workspaces are the
+    // same slot when they are the same object, never when they merely look
+    // alike.
+    comparisonMode: ObjectComparison.Identity
+    values: root.workspaceList.concat([root.plusSlot])
   }
 
-  function rebuildWorkspaces() {
+  // The "cards" style has no "+" slot, so it takes the list as it is.
+  ScriptModel {
+    id: workspaceModel
+    comparisonMode: ObjectComparison.Identity
+    values: root.workspaceList
+  }
+
+  function nextWorkspaceId() {
+    return StageLogic.nextWorkspaceId(
+      root.workspaceList.map(function(w) { return w.id }))
+  }
+
+  // Membership changes arrive as a signal from the model itself; nothing
+  // polls for them.
+  Connections {
+    target: Hyprland.workspaces
+    function onValuesChanged() {
+      if (root.opened) rebuildCoalesce.restart()
+    }
+  }
+
+  // Single-shot: restarted per trigger, fires once after the burst settles.
+  // Quickshell surfaces each newly created workspace in its own turn of the
+  // event loop — a `hyprctl --batch` creating two arrives as two signals
+  // about 9 ms apart — so `Qt.callLater`, which only collapses what is
+  // already queued in one turn, still ran a rebuild per workspace. A short
+  // debounce gives a monitor arriving with its workspaces, or a session
+  // restoring, the one rebuild it deserves.
+  Timer {
+    id: rebuildCoalesce
+    interval: 30
+    repeat: false
+    onTriggered: root.rebuildWorkspaces(true)
+  }
+
+  // The rebuilt list is filtered by monitor, and a workspace can change
+  // monitor without the model's membership changing at all: Quickshell
+  // handles `moveworkspacev2` by reassigning the workspace's monitor in
+  // place, and a workspace created before its monitor is known resolves it
+  // later, both without a `valuesChanged`. Watch each workspace's own
+  // monitor, so this overlay does not go on showing another monitor's
+  // workspace (or miss one that just arrived on this one).
+  Instantiator {
+    model: Hyprland.workspaces
+    delegate: QtObject {
+      required property var modelData
+      readonly property var workspaceMonitor: modelData.monitor
+      onWorkspaceMonitorChanged: {
+        if (root.opened) rebuildCoalesce.restart()
+      }
+    }
+  }
+
+  // Window geometry lives in each toplevel's lastIpcObject, which only
+  // changes when something asks Hyprland for it — so after a window closes
+  // the survivors keep their pre-close rectangles and render letterboxed
+  // until the next refresh. Refresh on the compositor's own events instead,
+  // coalescing a burst into one round trip: that batches the IPC and lets
+  // the compositor finish re-tiling before the geometry is read.
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      var name = String(event.name)
+      // The compositor confirming the window is gone ends the debounce; a
+      // handle Hyprland has reused is a different window.
+      if (name === "closewindow")
+        root.pendingCloses = StageLogic.prunePending(
+          root.pendingCloses, Date.now(), StageLogic.address(event.data))
+      if (root.opened && StageLogic.shouldRefresh(name)) geometryRefresh.restart()
+    }
+  }
+
+  // Single-shot: restarted per event, fires once after the burst settles.
+  Timer {
+    id: geometryRefresh
+    interval: 60
+    repeat: false
+    // Toplevels only: nothing here reads a workspace's `lastIpcObject`, and
+    // both the model's membership and each workspace's monitor come from the
+    // compositor's own events — Quickshell re-queries the workspaces itself
+    // when it sees one created.
+    onTriggered: Hyprland.refreshToplevels()
+  }
+
+  function rebuildWorkspaces(preserve) {
+    var oldId = root.selectedWorkspaceId
+    var oldIndex = root.selectedIndex
+    var wasPlus = root.plusSelected
     var out = []
     var values = Hyprland.workspaces.values
     for (var i = 0; i < values.length; i++) {
@@ -233,13 +387,32 @@ Item {
       out.push(ws)
     }
     out.sort(function(a, b) { return a.id - b.id })
-    root.workspaceList = out
 
-    root.selectedIndex = out.length > 0 ? 0 : -1
-    for (var j = 0; j < out.length; j++) {
-      if (Hyprland.focusedWorkspace && out[j].id === Hyprland.focusedWorkspace.id)
-        root.selectedIndex = j
-    }
+    // Resolve the new index against the rebuilt list before touching either
+    // property. `workspaceList` and `selectedIndex` cannot be assigned
+    // atomically, so between them `selectedWorkspace` is briefly a workspace
+    // nobody selected; dropping a pane zoom the reconciliation moved off its
+    // workspace up front makes that intermediate inert, because pane mode is
+    // scoped by workspace id and the address is already gone.
+    var index = StageLogic.reconcileSelection({
+      ids: out.map(function(w) { return w.id }),
+      oldId: oldId,
+      oldIndex: oldIndex,
+      wasPlus: wasPlus,
+      focusedId: Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : -1,
+      preserve: preserve === true
+    })
+    var newId = (index >= 0 && index < out.length) ? out[index].id : -1
+    if (newId !== oldId) root.selectPane(-1)
+
+    // Only a real membership change may replace the model: reassigning an
+    // equal list recreates every delegate, and with it every live capture.
+    if (StageLogic.membershipChanged(root.workspaceList, out))
+      root.workspaceList = out
+
+    // Exactly one assignment: an intermediate value would notify a
+    // selection nobody asked for.
+    root.selectedIndex = index
   }
 
   // --- Hold-to-cycle ("cycle" keybindMode) -----------------------------
@@ -254,6 +427,14 @@ Item {
     id: holdWatchdog
     interval: 10000
     onTriggered: root.cycled = false
+  }
+
+  // A close, or anything else that edits the desktop, is not a step:
+  // releasing the modifier after one must not jump anywhere. Stopping the
+  // watchdog together with the flag keeps the two from drifting apart.
+  function disarmCycle() {
+    root.cycled = false
+    holdWatchdog.stop()
   }
 
   function cycleStep(delta) {
@@ -274,17 +455,17 @@ Item {
       return
     }
 
+    root.warnUnlessLua()
     Hyprland.refreshWorkspaces()
     Hyprland.refreshToplevels() // fresh geometry in lastIpcObject
     wallpaperProbe.running = true
     settingsProbe.running = true
     root.kbdPriority = false
-    root.cycled = false
-    holdWatchdog.stop()
+    root.disarmCycle()
     // Reopening on the same workspace changes neither viewMode nor
     // selectedIndex, so nothing else clears a stale pane zoom.
-    root.paneIndex = -1
-    root.rebuildWorkspaces()
+    root.selectPane(-1)
+    root.rebuildWorkspaces(false)
     root.viewMode = root.viewPref === "grid" ? "grid" : "carousel"
     root.opened = true
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -292,8 +473,9 @@ Item {
 
   function close() {
     root.opened = false
-    root.cycled = false
-    holdWatchdog.stop()
+    root.disarmCycle()
+    geometryRefresh.stop()
+    rebuildCoalesce.stop()
   }
 
   function dismiss() {
@@ -307,13 +489,159 @@ Item {
     else root.open("{}")
   }
 
-  function luaDispatch(lua) {
-    Quickshell.execDetached(["hyprctl", "dispatch", lua])
+  // Every Stage action is a Hyprland Lua dispatch. Quickshell writes these
+  // straight to the socket hyprctl itself talks to — no fork, no exec, no
+  // reply to parse here: it logs any answer but "ok" as "Dispatch request
+  // … failed with error …" on its own. `dismiss()` only hides the overlay
+  // (the plugin is keepLoaded), so a request outlives it.
+  //
+  // Several Hyprland dispatchers re-tile while announcing nothing at all, so
+  // a request Stage sends itself gets the same coalesced refresh the
+  // compositor's own events get. Requests on one socket are answered in
+  // order, so the geometry the timer reads is the geometry this produced.
+  function dispatch(lua) {
+    if (!lua) return
+    Hyprland.dispatch(lua)
+    if (root.opened) geometryRefresh.restart()
+  }
+
+  // `hl.dsp.*` exists only under a Lua config (Omarchy's default); under a
+  // hyprlang config every Stage action would be a silent no-op. Say so once,
+  // rather than per click.
+  //
+  // Not at load: Quickshell resolves `usingLua` from the compositor, and the
+  // reply lands a round trip (~30 ms here) after the shell finishes loading,
+  // so the property still reads false then. The first open is the earliest
+  // moment the answer means anything, and the last one before it matters.
+  property bool luaWarningShown: false
+  function warnUnlessLua() {
+    if (root.luaWarningShown || Hyprland.usingLua) return
+    root.luaWarningShown = true
+    console.warn("Stage: Hyprland is running a hyprlang config, which has no"
+      + " hl.dsp dispatchers. Stage's focus, workspace and close actions all"
+      + " need a Lua Hyprland config (Omarchy's default) and will do nothing"
+      + " until this one is converted.")
+  }
+
+  // A bounded per-address debounce, not an optimistic removal: applications
+  // may decline or show a dialog. Explicit selectors resolve again inside
+  // Hyprland at execution; a missing match is a null window, NOT active focus.
+  property var pendingCloses: ({})
+  function requestWindowClose(value) {
+    var addr = StageLogic.address(value)
+    var live = Hyprland.toplevels.values.map(function(p) { return StageLogic.address(p.address) })
+    var now = Date.now()
+    if (!StageLogic.canRequest(addr, live, root.pendingCloses, now)) return
+    // Only a request that is actually going out disarms hold-to-cycle: a
+    // debounced repeat or a click on a preview the compositor has already
+    // dropped must not silently cancel the release-to-focus the user set up.
+    root.disarmCycle()
+    var next = StageLogic.prunePending(root.pendingCloses, now)
+    next[addr] = now + 2000
+    root.pendingCloses = next
+    root.dispatch(StageLogic.closeLua(addr))
+  }
+
+  // One control size for the component and for the placement maths that
+  // keeps it inside its thumbnail, on the shell's spacing scale like every
+  // other dimension here: a theme that makes the shell denser or roomier
+  // moves the control and its clearances with it.
+  readonly property real closeControlSize: Style.space(24)
+  readonly property real closeControlPad: Style.space(6)
+
+  // Both thumbnail delegates place their control the same way and differ only
+  // in what encloses them: an overscanned, sheared carousel slab, or a flat
+  // card whose content starts at its own origin. It is only solved for a
+  // thumbnail that is actually showing a control: every slab animates its
+  // size, and an unselected slice would otherwise re-solve the clamps for
+  // each of its windows on every frame of that animation.
+  readonly property var closeSpotHidden: ({ x: 0, y: 0, visible: false })
+  function closeSpotFor(show, thumb, contentX, contentY, frame, skew) {
+    if (!show) return root.closeSpotHidden
+    return StageLogic.closeControlPosition({
+      thumb: { x: thumb.x, y: thumb.y, width: thumb.width,
+               height: thumb.height, scale: thumb.scale },
+      content: { x: contentX, y: contentY },
+      slab: { width: frame.width, height: frame.height, skew: skew },
+      size: root.closeControlSize, pad: root.closeControlPad })
+  }
+
+  // The close control is a chip in the picker's own language: an accent
+  // parallelogram sharing the slabs' shear, like the workspace number chip,
+  // with a drawn cross (the theme font's multiplication sign varies too much
+  // in weight and centring to be the glyph). On a rounded title pill the chip
+  // would fight the pill, so `inline` drops it and keeps only the cross,
+  // dimmed until hovered. A flat card passes `shear: 0` for a plain chip.
+  component CloseControl: Item {
+    id: closeControl
+    required property string address
+    property string windowTitle: "window"
+    property bool inline: false
+    property real shear: root.skewSlope
+    readonly property bool hovered: closeHover.hovered
+    width: root.closeControlSize
+    height: root.closeControlSize
+    readonly property real sk: height * shear
+    property color ink: inline
+      ? Util.alpha(root.pickerText, hovered ? 1 : 0.6)
+      : StageLogic.contrastColor(root.pickerSelectedBorder, root.foreground, root.background)
+    Behavior on ink { ColorAnimation { duration: 170 } }
+    Accessible.role: Accessible.Button
+    Accessible.name: "Close " + windowTitle
+    Accessible.onPressAction: root.requestWindowClose(closeControl.address)
+    Shape {
+      visible: !closeControl.inline
+      anchors.fill: parent
+      antialiasing: true
+      preferredRendererType: Shape.CurveRenderer
+      opacity: closeControl.hovered ? 1 : 0.82
+      Behavior on opacity { NumberAnimation { duration: 170 } }
+      ShapePath {
+        fillColor: root.pickerSelectedBorder
+        strokeColor: "transparent"
+        startX: closeControl.sk; startY: 0
+        PathLine { x: closeControl.width; y: 0 }
+        PathLine { x: closeControl.width - closeControl.sk; y: closeControl.height }
+        PathLine { x: 0; y: closeControl.height }
+        PathLine { x: closeControl.sk; y: 0 }
+      }
+    }
+    Shape {
+      id: closeCross
+      anchors.centerIn: parent
+      width: Style.space(8)
+      height: width
+      antialiasing: true
+      preferredRendererType: Shape.CurveRenderer
+      ShapePath {
+        strokeColor: closeControl.ink
+        strokeWidth: Math.max(1, Style.space(1))
+        capStyle: ShapePath.RoundCap
+        fillColor: "transparent"
+        startX: 0; startY: 0
+        PathLine { x: closeCross.width; y: closeCross.height }
+        PathMove { x: 0; y: closeCross.height }
+        PathLine { x: closeCross.width; y: 0 }
+      }
+    }
+    // Qt delivers hover to the frontmost item that accepts it, so whatever
+    // draws this control takes the pointer away from anything underneath —
+    // on a title pill, reaching the × would otherwise drop the pill's
+    // highlight and snap its marquee back to the start. The handler keeps
+    // that state readable (`hovered`) so an enclosing surface can fold it
+    // into its own, and leaves the click to the MouseArea below.
+    HoverHandler { id: closeHover }
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      // Never propagate to the thumbnail's focus or background dismiss area.
+      onClicked: root.requestWindowClose(closeControl.address)
+    }
   }
 
   function focusWorkspace(id) {
     root.dismiss()
-    root.luaDispatch("hl.dsp.focus({ workspace = \"" + id + "\" })")
+    root.dispatch(StageLogic.focusWorkspaceLua(id))
   }
 
   function createWorkspace() {
@@ -322,15 +650,12 @@ Item {
 
   function focusWindow(address) {
     root.dismiss()
-    // Quickshell reports toplevel addresses without the 0x prefix.
-    var addr = String(address)
-    if (addr.indexOf("0x") !== 0) addr = "0x" + addr
-    root.luaDispatch("hl.dsp.focus({ window = \"address:" + addr + "\" })")
+    root.dispatch(StageLogic.focusWindowLua(address))
   }
 
   function selectAdjacent(delta) {
     if (root.slotCount === 0) return
-    root.selectedIndex = (root.selectedIndex + delta + root.slotCount) % root.slotCount
+    root.selectWorkspace((root.selectedIndex + delta + root.slotCount) % root.slotCount)
   }
 
   function activateSelected() {
@@ -344,8 +669,8 @@ Item {
   // One ←/→ step: panes when zoomed into them, else workspaces.
   function advance(delta) {
     if (root.paneIndex >= 0 && root.selectedPanes.length > 0)
-      root.paneIndex = (root.paneIndex + delta + root.selectedPanes.length)
-                       % root.selectedPanes.length
+      root.selectPane((root.paneIndex + delta + root.selectedPanes.length)
+                      % root.selectedPanes.length)
     else root.selectAdjacent(delta)
   }
 
@@ -451,7 +776,11 @@ Item {
         }
 
         Repeater {
-          model: slab.workspace ? slab.workspace.toplevels.values : []
+          // The ObjectModel itself, not its `values` array: an array is a new
+          // model on every membership change, which recreates every delegate
+          // and restarts every live capture. The model reports inserts and
+          // removes, so the surviving thumbnails keep their captures.
+          model: slab.workspace ? slab.workspace.toplevels : null
 
           delegate: Item {
             id: thumb
@@ -499,10 +828,34 @@ Item {
               }
             }
 
+            HoverHandler { id: thumbHover }
             MouseArea {
               anchors.fill: parent
               enabled: slab.selected
               onClicked: slab.windowActivated(thumb.topl.address)
+            }
+
+            // The slab masks its content to a skewed parallelogram and
+            // wsContent overscans that mask, so a control anchored to the
+            // thumbnail's own top-right corner is cut for every window that
+            // touches the slab's top or right edge. Anchor it to the visible
+            // intersection instead: the same corner wherever that corner is
+            // fully visible, pushed in by the overscan fringe and the skew
+            // allowance where it is not.
+            readonly property bool closeArmed:
+              slab.selected && (thumbHover.hovered || thumb.paneSelected)
+            readonly property var closeSpot:
+              root.closeSpotFor(closeArmed, thumb, wsContent.x, wsContent.y,
+                                slab, slab.skew)
+
+            CloseControl {
+              x: thumb.closeSpot.x
+              y: thumb.closeSpot.y
+              // Hidden rather than half-visible if even the clamped control
+              // would not fit inside the thumbnail.
+              visible: thumb.closeSpot.visible
+              address: String(thumb.topl.address)
+              windowTitle: String(thumb.topl.title || "window")
             }
           }
         }
@@ -664,8 +1017,7 @@ Item {
         if (root.keybindMode !== "cycle" || !root.cycled) return
         if (event.key !== Qt.Key_Meta && event.key !== Qt.Key_Super_L
             && event.key !== Qt.Key_Super_R) return
-        root.cycled = false
-        holdWatchdog.stop()
+        root.disarmCycle()
         root.activateCurrent()
         event.accepted = true
       }
@@ -675,18 +1027,31 @@ Item {
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
         var panes = caro && root.paneIndex >= 0
 
+        // Held X must never cascade onto the pane the hand-off selects.
+        // QtWayland marks every repeat of a client-side autorepeat, so the
+        // first press is the only one without the flag: no latch to hold, and
+        // none to be left set when focus leaves mid-hold.
+        if (event.key === Qt.Key_X) {
+          if (panes && event.modifiers === Qt.NoModifier && !event.isAutoRepeat) {
+            root.kbdPriority = true
+            root.requestWindowClose(root.paneAddress)
+          }
+          event.accepted = true
+          return
+        }
+
         if (event.key === Qt.Key_Escape) {
           root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_Up) {
           root.kbdPriority = true
           if (panes) {
-            root.paneIndex = -1
+            root.selectPane(-1)
           } else if (grid) {
             // Move up a row; past the top, fall back into the carousel
             // (unless locked to the grid).
             var up = root.selectedIndex - root.gridCols
-            if (up >= 0) root.selectedIndex = up
+            if (up >= 0) root.selectWorkspace(up)
             else if (root.viewPref === "auto") root.viewMode = "carousel"
           } else if (root.uiStyle === "picker" && root.viewPref === "auto") {
             root.viewMode = "grid"
@@ -698,11 +1063,11 @@ Item {
             // Move down a row; past the bottom, fall back into the carousel
             // (unless locked to the grid).
             var down = root.selectedIndex + root.gridCols
-            if (down < root.slotCount) root.selectedIndex = down
+            if (down < root.slotCount) root.selectWorkspace(down)
             else if (root.viewPref === "auto") root.viewMode = "carousel"
           } else if (caro && root.paneIndex < 0 && root.selectedPanes.length > 0) {
             // Zoom one more level: into the panes of the expanded preview.
-            root.paneIndex = 0
+            root.selectPane(0)
           }
           event.accepted = true
         } else if (event.key === Qt.Key_Left
@@ -780,15 +1145,18 @@ Item {
         MouseArea { anchors.fill: parent; onClicked: {} }
 
         Repeater {
-          model: root.slotCount
+          // The slot model, not `slotCount`: an int model re-binds every
+          // delegate's `workspace` when the list shifts. See slotModel.
+          model: slotModel
 
           delegate: WsSlab {
             id: caroItem
+            required property var modelData
             required property int index
 
             readonly property int relativeIndex: index - root.selectedIndex
 
-            workspace: index < root.workspaceList.length ? root.workspaceList[index] : null
+            workspace: modelData === root.plusSlot ? null : modelData
             selected: index === root.selectedIndex
             skew: pickerCard.expandedH * root.skewSlope
             highlightAddress: selected ? root.paneAddress : ""
@@ -808,8 +1176,8 @@ Item {
             Behavior on width { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
             Behavior on height { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
 
-            onPressed: root.selectedIndex = index
-            onActivated: { root.selectedIndex = index; root.activateSelected() }
+            onPressed: root.selectWorkspace(index)
+            onActivated: { root.selectWorkspace(index); root.activateSelected() }
             onWindowActivated: function(address) { root.focusWindow(address) }
           }
         }
@@ -836,14 +1204,16 @@ Item {
           rowSpacing: root.gridGap
 
           Repeater {
-            model: root.slotCount
+            // The slot model. See the carousel Repeater.
+            model: slotModel
 
             delegate: WsSlab {
+              required property var modelData
               required property int index
 
               width: gridView.cardW
               height: gridView.cardH
-              workspace: index < root.workspaceList.length ? root.workspaceList[index] : null
+              workspace: modelData === root.plusSlot ? null : modelData
               selected: index === root.selectedIndex
               skew: gridView.cardH * root.skewSlope
               chipAlways: true
@@ -854,8 +1224,8 @@ Item {
               z: selected ? 2 : 1
               Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
-              onPressed: root.selectedIndex = index
-              onActivated: { root.selectedIndex = index; root.activateSelected() }
+              onPressed: root.selectWorkspace(index)
+              onActivated: { root.selectWorkspace(index); root.activateSelected() }
               onWindowActivated: function(address) { root.focusWindow(address) }
             }
           }
@@ -872,10 +1242,6 @@ Item {
       anchors.bottomMargin: Style.space(44)
       anchors.horizontalCenter: parent.horizontalCenter
       spacing: Style.space(8)
-
-      // Same spatial (left-to-right) order as pane navigation and the
-      // thumbnails themselves.
-      readonly property var selectedToplevels: root.selectedPanes
 
       Rectangle {
         visible: root.plusSelected
@@ -905,198 +1271,249 @@ Item {
       }
 
       Text {
-        visible: !root.plusSelected && labelBar.selectedToplevels.length === 0
+        visible: !root.plusSelected && root.selectedPanes.length === 0
         text: "Empty workspace"
         color: Util.alpha(root.pickerText, 0.6)
         font.pixelSize: Style.font.title
         font.weight: Font.DemiBold
       }
 
-      Repeater {
-        model: root.plusSelected ? [] : labelBar.selectedToplevels
+      // The pills bind the workspace's ObjectModel, like the thumbnails: an
+      // array is a new model on every membership change *and* on every
+      // re-tile, and rebuilding a pill re-runs its MPRIS and PipeWire lookups
+      // and reloads its album art. So this is not a Row — a Row lays its
+      // children out in creation order, and these have to sit in pane order.
+      // Each pill takes the x its place in `selectedPanes` earns it, and
+      // slides across when a swap reorders them.
+      Item {
+        id: pillRow
+        visible: !root.plusSelected && root.selectedPanes.length > 0
+        height: Style.space(30)
+        width: Math.max(0, pillRow.offsetOf(pills.count) - pillRow.gap)
+        readonly property real gap: labelBar.spacing
 
-        delegate: Rectangle {
-          id: pill
-          required property var modelData
-
-          readonly property var topl: modelData
-          readonly property bool paneSelected: root.paneAddress !== ""
-                                               && root.paneAddress === String(topl.address)
-          readonly property var player: root.playerForWindow(topl)
-          readonly property bool hasTrack: player !== null
-                                           && !!(player.trackTitle || player.trackArtist)
-          readonly property bool playing: hasTrack && player.isPlaying === true
-          readonly property string artUrl: hasTrack ? (player.trackArtUrl || "") : ""
-          readonly property bool audible: !hasTrack && root.windowHasAudio(topl)
-
-          readonly property string label: {
-            if (pill.hasTrack) {
-              var tt = pill.player.trackTitle || ""
-              var ta = pill.player.trackArtist || ""
-              return ta && tt ? ta + " — " + tt : (tt || ta)
-            }
-            var t = String(topl.title || "")
-            if (!t && topl.wayland) t = String(topl.wayland.appId || "")
-            return t || "Untitled"
+        // Where the pill at `order` starts: every pill before it in pane
+        // order, each with the gap that follows it. Reading their widths and
+        // their order here is what makes the offsets re-evaluate when a title,
+        // an album art badge or a swap changes one of them.
+        function offsetOf(order) {
+          var sum = 0
+          for (var i = 0; i < pills.count; i++) {
+            var p = pills.itemAt(i)
+            if (p && p.order >= 0 && p.order < order) sum += p.width + pillRow.gap
           }
+          return sum
+        }
 
-          width: content.implicitWidth + Style.space(20)
-          height: Style.space(30)
-          radius: height / 2
-          color: Util.alpha(root.pickerText,
-                            (pillMouse.containsMouse || pill.paneSelected) ? 0.16 : 0.08)
-          border.color: pill.paneSelected ? root.pickerSelectedBorder
-                        : pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
-                                       : Util.alpha(root.pickerText, 0.18)
-          border.width: 1
-          Behavior on border.color { ColorAnimation { duration: 170 } }
+        Repeater {
+          id: pills
+          model: (root.plusSelected || !root.selectedWorkspace)
+                 ? null : root.selectedWorkspace.toplevels
 
-          // Soft accent glow ring while playing or pane-highlighted.
-          Rectangle {
-            anchors.fill: parent
-            anchors.margins: -3
+          delegate: Rectangle {
+            id: pill
+            required property var modelData
+
+            readonly property var topl: modelData
+
+            // Where this window sits in pane order, and therefore in the row.
+            // A window the sort has not placed yet has nowhere to be drawn.
+            readonly property int order:
+              StageLogic.paneIndexFor(root.selectedPanes, String(topl.address))
+            x: pillRow.offsetOf(pill.order)
+            visible: pill.order >= 0
+            Behavior on x { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+            // The × sits on top of the pill and takes the hover with it, so the
+            // pill is "hot" for either.
+            readonly property bool hot: pillMouse.containsMouse || pillClose.hovered
+            readonly property bool paneSelected: root.paneAddress !== ""
+                                                 && root.paneAddress === String(topl.address)
+            readonly property var player: root.playerForWindow(topl)
+            readonly property bool hasTrack: player !== null
+                                             && !!(player.trackTitle || player.trackArtist)
+            readonly property bool playing: hasTrack && player.isPlaying === true
+            readonly property string artUrl: hasTrack ? (player.trackArtUrl || "") : ""
+            readonly property bool audible: !hasTrack && root.windowHasAudio(topl)
+
+            readonly property string label: {
+              if (pill.hasTrack) {
+                var tt = pill.player.trackTitle || ""
+                var ta = pill.player.trackArtist || ""
+                return ta && tt ? ta + " — " + tt : (tt || ta)
+              }
+              var t = String(topl.title || "")
+              if (!t && topl.wayland) t = String(topl.wayland.appId || "")
+              return t || "Untitled"
+            }
+
+            width: content.implicitWidth + Style.space(20)
+            height: Style.space(30)
             radius: height / 2
-            color: "transparent"
-            border.color: Util.alpha(root.pickerSelectedBorder, 0.3)
-            border.width: 2
-            opacity: (pill.playing || pill.paneSelected) ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 170 } }
-          }
+            color: Util.alpha(root.pickerText,
+                              (pill.hot || pill.paneSelected) ? 0.16 : 0.08)
+            border.color: pill.paneSelected ? root.pickerSelectedBorder
+                          : pill.playing ? Util.alpha(root.pickerSelectedBorder, 0.7)
+                                         : Util.alpha(root.pickerText, 0.18)
+            border.width: 1
+            Behavior on border.color { ColorAnimation { duration: 170 } }
 
-          // Vertical sheen + hairline top highlight.
-          Rectangle {
-            anchors.fill: parent
-            radius: parent.radius
-            gradient: Gradient {
-              GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.05) }
-              GradientStop { position: 0.55; color: "transparent" }
+            // Soft accent glow ring while playing or pane-highlighted.
+            Rectangle {
+              anchors.fill: parent
+              anchors.margins: -3
+              radius: height / 2
+              color: "transparent"
+              border.color: Util.alpha(root.pickerSelectedBorder, 0.3)
+              border.width: 2
+              opacity: (pill.playing || pill.paneSelected) ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: 170 } }
             }
-          }
 
-          MouseArea {
-            id: pillMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.focusWindow(pill.topl.address)
-          }
-
-          Row {
-            id: content
-            anchors.centerIn: parent
-            spacing: Style.space(7)
-
-            // Album art from MPRIS, circle-cropped.
-            ClippingRectangle {
-              visible: pill.artUrl !== ""
-              anchors.verticalCenter: parent.verticalCenter
-              width: pill.height - Style.space(8)
-              height: width
-              radius: width / 2
-              color: Util.alpha(root.pickerText, 0.1)
-
-              Image {
-                anchors.fill: parent
-                source: pill.artUrl
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                smooth: true
+            // Vertical sheen + hairline top highlight.
+            Rectangle {
+              anchors.fill: parent
+              radius: parent.radius
+              gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.05) }
+                GradientStop { position: 0.55; color: "transparent" }
               }
             }
 
-            // Play state, clickable to toggle without leaving the overview.
-            Text {
-              visible: pill.hasTrack
-              anchors.verticalCenter: parent.verticalCenter
-              text: pill.playing ? "󰏤" : "󰐊"
-              color: pill.playing ? root.pickerSelectedBorder : root.pickerText
-              font.pixelSize: Style.font.title
-
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: pill.player.togglePlaying()
-              }
+            MouseArea {
+              id: pillMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.focusWindow(pill.topl.address)
             }
 
-            // Label: elided at rest; overflowing labels marquee on hover.
-            Item {
-              id: labelClip
-              anchors.verticalCenter: parent.verticalCenter
-              width: Math.min(measureText.implicitWidth, 320)
-              height: measureText.implicitHeight
-              clip: true
+            Row {
+              id: content
+              anchors.centerIn: parent
+              spacing: Style.space(7)
 
-              readonly property bool overflowing: measureText.implicitWidth > width
-              readonly property bool marquee: overflowing && pillMouse.containsMouse
-              readonly property real gap: Style.space(24)
+              // Album art from MPRIS, circle-cropped.
+              ClippingRectangle {
+                visible: pill.artUrl !== ""
+                anchors.verticalCenter: parent.verticalCenter
+                width: pill.height - Style.space(8)
+                height: width
+                radius: width / 2
+                color: Util.alpha(root.pickerText, 0.1)
 
+                Image {
+                  anchors.fill: parent
+                  source: pill.artUrl
+                  fillMode: Image.PreserveAspectCrop
+                  asynchronous: true
+                  smooth: true
+                }
+              }
+
+              // Play state, clickable to toggle without leaving the overview.
               Text {
-                id: measureText
-                visible: false
-                text: pill.label
-                textFormat: Text.PlainText
-                font.family: Style.font.menuFamily
-                font.pixelSize: Style.font.subtitle
+                visible: pill.hasTrack
+                anchors.verticalCenter: parent.verticalCenter
+                text: pill.playing ? "󰏤" : "󰐊"
+                color: pill.playing ? root.pickerSelectedBorder : root.pickerText
+                font.pixelSize: Style.font.title
+
+                MouseArea {
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: pill.player.togglePlaying()
+                }
               }
 
-              Text {
-                visible: !labelClip.marquee
-                width: labelClip.width
-                text: pill.label
-                textFormat: Text.PlainText
-                color: root.pickerText
-                font.family: Style.font.menuFamily
-                font.pixelSize: Style.font.subtitle
-                elide: Text.ElideRight
-              }
+              // Label: elided at rest; overflowing labels marquee on hover.
+              Item {
+                id: labelClip
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(measureText.implicitWidth, 320)
+                height: measureText.implicitHeight
+                clip: true
 
-              Row {
-                id: scroller
-                visible: labelClip.marquee
-                spacing: labelClip.gap
+                readonly property bool overflowing: measureText.implicitWidth > width
+                readonly property bool marquee: overflowing && pill.hot
+                readonly property real gap: Style.space(24)
 
                 Text {
+                  id: measureText
+                  visible: false
+                  text: pill.label
+                  textFormat: Text.PlainText
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: Style.font.subtitle
+                }
+
+                Text {
+                  visible: !labelClip.marquee
+                  width: labelClip.width
                   text: pill.label
                   textFormat: Text.PlainText
                   color: root.pickerText
                   font.family: Style.font.menuFamily
                   font.pixelSize: Style.font.subtitle
+                  elide: Text.ElideRight
                 }
-                Text {
-                  text: pill.label
-                  textFormat: Text.PlainText
-                  color: root.pickerText
-                  font.family: Style.font.menuFamily
-                  font.pixelSize: Style.font.subtitle
+
+                Row {
+                  id: scroller
+                  visible: labelClip.marquee
+                  spacing: labelClip.gap
+
+                  Text {
+                    text: pill.label
+                    textFormat: Text.PlainText
+                    color: root.pickerText
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.subtitle
+                  }
+                  Text {
+                    text: pill.label
+                    textFormat: Text.PlainText
+                    color: root.pickerText
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.subtitle
+                  }
+                }
+
+                SequentialAnimation {
+                  running: labelClip.marquee
+                  loops: Animation.Infinite
+                  onRunningChanged: if (!running) scroller.x = 0
+
+                  PauseAnimation { duration: 400 }
+                  NumberAnimation {
+                    target: scroller
+                    property: "x"
+                    from: 0
+                    to: -(measureText.implicitWidth + labelClip.gap)
+                    duration: Math.max(1500, (measureText.implicitWidth + labelClip.gap) * 16)
+                  }
+                  PauseAnimation { duration: 250 }
                 }
               }
 
-              SequentialAnimation {
-                running: labelClip.marquee
-                loops: Animation.Infinite
-                onRunningChanged: if (!running) scroller.x = 0
-
-                PauseAnimation { duration: 400 }
-                NumberAnimation {
-                  target: scroller
-                  property: "x"
-                  from: 0
-                  to: -(measureText.implicitWidth + labelClip.gap)
-                  duration: Math.max(1500, (measureText.implicitWidth + labelClip.gap) * 16)
-                }
-                PauseAnimation { duration: 250 }
+              // Always discoverable, including when the preview is too small.
+              CloseControl {
+                id: pillClose
+                inline: true
+                anchors.verticalCenter: parent.verticalCenter
+                address: String(pill.topl.address)
+                windowTitle: pill.label
               }
-            }
 
-            // Audio badge for windows making sound without MPRIS metadata.
-            Text {
-              visible: pill.audible
-              anchors.verticalCenter: parent.verticalCenter
-              text: "󰕾"
-              color: Util.alpha(root.pickerText, 0.7)
-              font.pixelSize: Style.font.subtitle
+              // Audio badge for windows making sound without MPRIS metadata.
+              Text {
+                visible: pill.audible
+                anchors.verticalCenter: parent.verticalCenter
+                text: "󰕾"
+                color: Util.alpha(root.pickerText, 0.7)
+                font.pixelSize: Style.font.subtitle
+              }
             }
           }
         }
@@ -1122,7 +1539,9 @@ Item {
         spacing: cardGap
 
         Repeater {
-          model: root.workspaceList
+          // The model, not the array: a reassigned array is a new model and
+          // recreates every card. See slotModel.
+          model: workspaceModel
 
           delegate: Item {
             id: slot
@@ -1169,12 +1588,14 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                onPositionChanged: if (!root.kbdPriority) root.selectedIndex = slot.index
+                onPositionChanged: if (!root.kbdPriority) root.selectWorkspace(slot.index)
                 onClicked: root.focusWorkspace(slot.workspace.id)
               }
 
               Repeater {
-                model: slot.workspace.toplevels.values
+                // The model itself, so a close does not restart the
+                // surviving captures. See the carousel Repeater.
+                model: slot.workspace.toplevels
 
                 delegate: Item {
                   id: thumb
@@ -1224,9 +1645,25 @@ Item {
                     }
                   }
 
+                  HoverHandler { id: cardThumbHover }
                   MouseArea {
                     anchors.fill: parent
                     onClicked: root.focusWindow(thumb.topl.address)
+                  }
+
+                  // The card clips its content, so a window hanging over the
+                  // monitor edge would lose the control; keep it inside. Same
+                  // placement as the carousel with no shear and no overscan.
+                  readonly property var closeSpot:
+                    root.closeSpotFor(cardThumbHover.hovered, thumb, 0, 0, card, 0)
+
+                  CloseControl {
+                    shear: 0 // a flat card has no slant to match
+                    x: thumb.closeSpot.x
+                    y: thumb.closeSpot.y
+                    visible: thumb.closeSpot.visible
+                    address: String(thumb.topl.address)
+                    windowTitle: String(thumb.topl.title || "window")
                   }
                 }
               }

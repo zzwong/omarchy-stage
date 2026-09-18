@@ -66,6 +66,8 @@ Then drop the keybind or gestures you added.
 | `1`–`9` | jump to that workspace directly |
 | click a slice | select it |
 | click the expanded preview | jump — window thumbnails are individually clickable |
+| `X` (no modifiers, pane mode only) | request graceful close of the selected window; hold/repeat never closes another pane |
+| `×` on a thumbnail / title pill | request graceful close without leaving Stage |
 | the `+` slot at the end | create the next workspace |
 | `Esc` / click outside | close |
 
@@ -73,7 +75,67 @@ Below the carousel, one pill per window. Windows with an MPRIS player
 (Spotify, browsers, mpv) show album art, artist — track, and a play/pause
 button that works without leaving the overview. Windows emitting audio
 without MPRIS get a speaker badge. Labels that don't fit marquee on hover.
-Every pill is click-to-focus.
+Every pill is click-to-focus outside its dedicated controls.
+
+### Closing windows
+
+The `×` target appears on thumbnail hover, or on keyboard-selected panes,
+sized off the shell's spacing scale like everything else in the overlay. Picker carousel/grid expose it on the selected workspace only; title
+pills also have an always-visible `×` as a fallback for tiny previews. Cards
+expose hover controls on individual previews, but have no pane mode or title
+pill fallback. Thumbnails too small to hold the control clear of the window
+omit it rather than covering ordinary click targets; use picker pills for
+those windows. The control sits inside the visible part of its preview, so
+the workspace slab's skewed mask never clips it, and it takes a contrasting
+glyph on hover. This change adds no movement or dragging controls.
+
+Closing sends Hyprland's normal close request, **never kill**. Stage stays
+open and previews disappear only when the compositor removes the window.
+Selection tracks the same window across geometry changes; when it actually
+closes, pane mode goes to the window that stood next to it (the one before it
+at the end of the row), wherever the re-tile has since moved that window.
+Empty workspaces leave pane mode. The surviving previews pick up the compositor's new tiling
+while Stage stays open: Stage refreshes window geometry on the compositor's
+events — all of them but the handful that provably move nothing — and after
+each request it sends itself, since several Hyprland dispatchers re-tile
+while announcing nothing at all. A burst is batched into one refresh, so
+nothing has to be reopened to look right. Workspaces arriving and leaving are
+batched the same way, and each slot is keyed by its workspace rather than by
+its position, so a workspace appearing in the middle of the row leaves the
+previews either side of it — and the live captures inside them — running
+untouched. Duplicate requests to the same address are suppressed for
+two seconds; after that you can retry if the application declines. Unsaved-work
+dialogs may require focusing the application to answer them. Closing disarms
+hold-to-cycle's release-to-focus action.
+
+Every Stage action — closing, and jumping to a window or workspace — is a
+Hyprland **Lua** dispatch, sent over Hyprland's own request socket, so Stage
+needs a Lua config (Omarchy's default). Under a hyprlang config those
+dispatchers do not exist and the actions do nothing: Stage warns once when it
+loads, and Quickshell logs each dispatch the compositor rejects.
+
+#### Close-controls QA
+
+Automated: `node tests/run.cjs`, plus the lint workflow commands.
+Manual checklist (requires an isolated compositor or disposable windows):
+
+- In carousel, grid, and cards, hover a preview and click `×`: Stage stays
+  open; clicking elsewhere still focuses normally. Check small previews and
+  picker pill fallback, including media play/pause and long titles.
+- Enter pane mode with `↓`, close first/middle/last windows using `X`, and
+  hold `X` across removal: only the original window receives a request.
+- Modified `X`, grid/cards `X`, and autorepeat must not close windows.
+- Decline an unsaved-work prompt; preview remains, and retry works after two
+  seconds. Verify closing a pending window externally and workspace removal.
+- With Stage open, create and destroy several workspaces in one `hyprctl
+  --batch`: the row settles in one step and the previews on the workspaces
+  you did not touch keep playing rather than blinking out and restarting.
+- Reorder window geometry externally: selection stays at the same address.
+  Close the last pane; no stale selection or accidental focus/dismissal.
+- Begin a mouse close after a cycle step: releasing Super must not activate.
+  Inspect hover/keyboard visibility, hit targets, clipping and accessibility
+  names at different display scales, and that hovering a pill's × keeps the
+  pill itself highlighted.
 
 ## Settings
 

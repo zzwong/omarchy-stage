@@ -14,13 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install qmllint and jq
-        run: pacman -Sy --noconfirm qt6-declarative jq
+      - name: Install qmllint, jq, Node.js and Lua
+        run: pacman -Sy --noconfirm qt6-declarative jq nodejs lua
+
+      - name: Tests
+        run: node tests/run.cjs
 
       # The qs.* shell modules and Quickshell types only resolve inside
-      # omarchy-shell, so import-dependent categories are disabled; this
-      # gates on parse errors and every other warning category.
+      # omarchy-shell, so import-dependent categories are disabled (that
+      # includes the C++ enum parameter types of Quickshell's own signals);
+      # this gates on parse errors and every other warning category.
       - name: qmllint Stage.qml
+        # Independent of the tests: a failure in either should not hide the
+        # other's result.
+        if: ${{ !cancelled() }}
         run: |
           /usr/lib/qt6/bin/qmllint \
             --import disable \
@@ -30,4 +37,5 @@ jobs:
             Stage.qml
 
       - name: Validate JSON
+        if: ${{ !cancelled() }}
         run: jq -e . manifest.json settings.example.json > /dev/null
