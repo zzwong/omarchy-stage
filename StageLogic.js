@@ -23,10 +23,17 @@ function focusWindowLua(value) {
     return addr ? 'hl.dsp.focus({ window = "address:' + addr + '" })' : ""
 }
 
+// A workspace id as Hyprland will take it: a positive integer and nothing
+// else, so no dispatch string ever interpolates something a title or a
+// settings file could have written. 0 means "not one".
+function workspaceId(value) {
+    var n = Number(value)
+    return Number.isFinite(n) && Math.floor(n) === n && n > 0 ? n : 0
+}
+
 function focusWorkspaceLua(id) {
-    var n = Number(id)
-    return Number.isFinite(n) && Math.floor(n) === n
-        ? 'hl.dsp.focus({ workspace = "' + n + '" })' : ""
+    var n = workspaceId(id)
+    return n ? 'hl.dsp.focus({ workspace = ' + n + ' })' : ""
 }
 
 // --- Close requests --------------------------------------------------------
@@ -224,4 +231,136 @@ function luminance(c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b }
 function contrastColor(fill, a, b) {
     var f = luminance(fill)
     return Math.abs(luminance(a) - f) >= Math.abs(luminance(b) - f) ? a : b
+}
+
+// --- Drag ------------------------------------------------------------------
+//
+// Dragging a grid thumbnail onto another workspace card. The gesture itself
+// is a DragHandler on the thumbnail, so Qt decides what is a click and what
+// is a drag and which item the pointer picked up; what is left -- where a
+// drop may land, what the move is allowed to do, and when the gesture is
+// over -- is decided here, with no pointer and no compositor.
+
+// How far the pointer must travel before a press becomes a drag rather than
+// a click, in logical pixels. Handed to DragHandler.dragThreshold.
+var DRAG_THRESHOLD = 12
+
+// `hl.dsp.window.move` with a selector naming a grouped window moves the
+// whole group, which is never what dragging one thumbnail asks for. The
+// refusal itself is in the move chunk, in the compositor; this is the
+// affordance, so a grouped thumbnail does not lift in the first place.
+function isGrouped(ipc) {
+    return !!(ipc && ipc.grouped && ipc.grouped.length > 0)
+}
+
+// Moving a window to another workspace, as one Lua chunk Hyprland runs: it
+// resolves the window, checks it and moves it in one call, so nothing is
+// decided against state read before the dispatch. Both ways of asking -- a
+// dragged thumbnail and Ctrl+Shift+arrow -- build this one chunk, so the two
+// can never come to disagree about what a move is allowed to do.
+//
+// It refuses a window the compositor no longer has, one that is unmapped or
+// hidden, and one in a group, because `hl.dsp.window.move` takes the whole
+// group with it. Floating and fullscreen windows move perfectly well and are
+// not refused; the swap chunk is stricter because a swap rearranges a tiling.
+// A destination that exists must be on the source's monitor; one that does
+// not exist yet is created, which is what the grid's "+" slot asks for.
+//
+// `follow = false`: the compositor keeps its focus and Stage stays open on
+// the workspace the user is looking at. Returns "" for input it will not
+// build a chunk for; "move" or "noop" for what it did.
+function moveLua(value, id, create) {
+    var window = address(value)
+    var dest = workspaceId(id)
+    if (!window || !dest) return ""
+    var selector = '"address:' + window + '"'
+    return [
+        'function()',
+        '  local s = hl.get_window(' + selector + ')',
+        '  if s == nil or not s.mapped or s.hidden or s.group ~= nil',
+        '      or s.monitor == nil then return "noop" end',
+        '  local target = hl.get_workspace(' + dest + ')',
+        '  if target == nil then',
+        // Only the "+" slot may bring a workspace into being; a card whose
+        // workspace vanished under the pointer, or a keyboard move whose row
+        // entry is gone, is refused rather than recreated.
+        create ? '    -- the "+" slot: the move itself creates it'
+               : '    return "noop"',
+        '  elseif target.monitor == nil or target.monitor.id ~= s.monitor.id then',
+        '    return "noop"',
+        '  end',
+        '  hl.dispatch(hl.dsp.window.move({ window = ' + selector + ',',
+        '    workspace = ' + dest + ', follow = false }))',
+        '  return "move"',
+        'end'
+    ].join('\n')
+}
+
+// The workspace a drop lands on, or 0 for "do nothing". Re-decided from live
+// compositor state, both while the pointer hovers (so the highlight can never
+// promise an illegal move) and again at release.
+//   o.hit           the card under the pointer: {id, workspace, slab}, id 0
+//                   is the "+" slot, null when the pointer is over no card
+//   o.dragWorkspace workspace the dragged window was picked up from
+//   o.sourceLive    the window still exists, on that same workspace
+//   o.shownIds      ids of the workspaces Stage is showing -- the focused
+//                   monitor's, the same list the "+" card's caption counts
+//                   from, so a drop creates the workspace the card names
+//   o.workspaces    the compositor's live workspace objects, every monitor's
+function dropDecision(o) {
+    var hit = o.hit
+    if (!hit || !o.sourceLive) return 0
+    if (hit.id === 0) // the "+" slot: whatever id it would create right now
+        return nextWorkspaceId(o.shownIds || [])
+    if (hit.id === o.dragWorkspace) return 0 // same workspace: no reordering
+    // Identity, not just the id: a workspace destroyed and recreated under the
+    // pointer is a different workspace that nobody aimed at.
+    var live = o.workspaces || []
+    for (var j = 0; j < live.length; j++)
+        if (live[j] === hit.workspace && live[j].id === hit.id) return hit.id
+    return 0
+}
+
+// Two hits name the same card. A release only moves a window where the
+// highlight promised it would: the cards slide under a standing pointer when
+// the workspace list changes, and whatever arrives under it is not what
+// anybody aimed at.
+function sameCard(a, b) {
+    return !!a && !!b && a.slab === b.slab && a.id === b.id
+        && a.workspace === b.workspace
+}
+
+// The gesture's lifetime, as one pure transition. The threshold, the grab and
+// which thumbnail was picked up are Qt's to decide -- a drag begins when the
+// handler goes active -- so what is left is what the gesture is carrying and
+// whether a release still counts:
+//   phase       "idle" | "dragging"
+//   address     the dragged window, normalized
+//   workspace   id of the card it was picked up from, as the model gave it:
+//               nothing interpolates it, it is only ever compared
+//   title       proxy label
+// Events: {type: "start", address, workspace, title}, {type: "release"}, and
+// "escape" / "cancel" / "sourceGone", which end the gesture where it stands.
+//
+// Returns the next state and, separately, the one thing the caller must do
+// because of this transition -- "move" or "none". The result is not the
+// state: an idle state carrying the last gesture's window would keep every
+// binding that watches a live drag scanning for it.
+function dragIdle() {
+    return { phase: "idle", address: "", workspace: 0, title: "" }
+}
+
+function dragTransition(state, event) {
+    var s = state || dragIdle()
+    if (event.type === "start")
+        return { state: { phase: "dragging", address: address(event.address),
+                          workspace: event.workspace,
+                          title: event.title ? String(event.title) : "" },
+                 action: "none" }
+    // Everything else ends the gesture, and only the release of one that is
+    // still running does anything: a release after an Escape, a lost grab or
+    // a window that went away must not move a thing.
+    return { state: dragIdle(),
+             action: event.type === "release" && s.phase === "dragging"
+                 ? "move" : "none" }
 }
