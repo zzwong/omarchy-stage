@@ -57,9 +57,8 @@ assert.equal(everyAssignment, 2,
 // exec would fail silently, and a `hyprctl dispatch` child would fork a
 // process per click for a reply Quickshell already logs.
 assert.ok(!/execDetached/.test(qml), 'no fire-and-forget dispatch in Stage.qml');
-assert.ok(!/"hyprctl",\s*"dispatch"/.test(qml),
-          'dispatches go through Hyprland.dispatch, not a hyprctl child');
 assert.ok(/Hyprland\.dispatch\(/.test(qml), 'Hyprland.dispatch is used');
+assert.ok(!/"hyprctl"/.test(qml), 'nothing forks a hyprctl child');
 
 // Every Repeater over windows binds the ObjectModel, not a JS array: an array
 // is a new model on every membership change *and* on every re-tile (sortPanes
@@ -93,10 +92,19 @@ const disarmers = (qml.match(/cycled\s*=\s*false/g) || []).length;
 assert.equal(disarmers, 2,
              'only disarmCycle() and the watchdog clear `cycled`, got ' + disarmers);
 
+// Key routing is one pure decision in StageLogic, not a chain of key
+// comparisons in a handler: a stray `else if` in one is how a modified key
+// reaches navigation, or how a release commits a step nobody took. Presses
+// and releases both go through routeKey, so no key name belongs in the QML
+// at all.
+assert.ok(/StageLogic\.routeKey\(/.test(functionBody(qml, 'handleKey')),
+          'the key catcher asks routeKey what a key means');
+assert.ok(!/Qt\.Key_/.test(qml), 'Stage.qml compares no keys of its own');
+
 // The shared logic lives in one importable module.
 assert.ok(/import "StageLogic\.js" as StageLogic/.test(qml), 'StageLogic.js is imported');
 assert.ok(fs.existsSync(path.join(root, 'StageLogic.js')));
 assert.ok(!/^\s*\.pragma\s/m.test(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8')),
           'StageLogic.js stays loadable by the tests verbatim');
 
-console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, identity-keyed models, one cycle disarm');
+console.log('Stage.qml: debounced rebuilds, one selectedIndex assignment, socket dispatch, identity-keyed models, one cycle disarm, routed keys');

@@ -364,3 +364,153 @@ function dragTransition(state, event) {
              action: event.type === "release" && s.phase === "dragging"
                  ? "move" : "none" }
 }
+
+// --- Keyboard editing ------------------------------------------------------
+//
+// Qt enum values are repeated here so tests can load this module without QML.
+var KEY = {
+    escape: 0x01000000, tab: 0x01000001, backtab: 0x01000002,
+    ret: 0x01000004, enter: 0x01000005,
+    left: 0x01000012, up: 0x01000013, right: 0x01000014, down: 0x01000015,
+    meta: 0x01000022, superL: 0x01000053, superR: 0x01000054,
+    zero: 0x30, nine: 0x39, x: 0x58
+}
+
+var MOD = {
+    none: 0x00000000, shift: 0x02000000, control: 0x04000000,
+    alt: 0x08000000, meta: 0x10000000, keypad: 0x20000000
+}
+
+// The compositor owns the opening press, so Stage only sees these releases.
+var MODIFIER_KEYS = [KEY.meta, KEY.superL, KEY.superR]
+
+// Swap axis, overlap axis, and coordinate direction.
+var DIRECTIONS = {
+    left:  { axis: "x", across: "y", negative: true },
+    right: { axis: "x", across: "y", negative: false },
+    up:    { axis: "y", across: "x", negative: true },
+    down:  { axis: "y", across: "x", negative: false }
+}
+
+var ARROW_DIRECTIONS = {}
+ARROW_DIRECTIONS[KEY.left] = "left"
+ARROW_DIRECTIONS[KEY.right] = "right"
+ARROW_DIRECTIONS[KEY.up] = "up"
+ARROW_DIRECTIONS[KEY.down] = "down"
+
+function arrowDirection(key) { return ARROW_DIRECTIONS[key] || "" }
+
+// Adjacent index in the displayed workspace row, or -1 at either edge.
+function moveDestinationIndex(ids, fromId, negative) {
+    var here = ids.indexOf(fromId)
+    if (here < 0) return -1
+    var to = here + (negative ? -1 : 1)
+    return (to >= 0 && to < ids.length) ? to : -1
+}
+
+// Build one compositor-side swap. The workspace id prevents a stale Stage
+// view from rearranging a window that has since moved elsewhere.
+function swapLua(addr, direction, wsId) {
+    var window = address(addr)
+    var dir = DIRECTIONS[direction]
+    var here = workspaceId(wsId)
+    if (!window || !dir || !here) return ""
+    var selector = '"address:' + window + '"'
+    return [
+        'function()',
+        '  local function ok(w)',
+        '    return w ~= nil and w.mapped and not w.hidden and not w.floating',
+        '      and w.fullscreen == 0 and w.fullscreen_client == 0 and w.group == nil',
+        '  end',
+        '  local s = hl.get_window(' + selector + ')',
+        '  if not ok(s) or s.workspace == nil or s.monitor == nil',
+        '      or s.workspace.id ~= ' + here + ' then return "noop" end',
+        '  local along, across = "' + dir.axis + '", "' + dir.across + '"',
+        '  local sign = ' + (dir.negative ? '-1' : '1'),
+        // Stable geometric neighbour selection, independent of enumeration order.
+        '  local best, bd, bp = nil, 0, 0',
+        '  for _, t in ipairs(hl.get_windows({ workspace = s.workspace })) do',
+        '    if t.address ~= s.address and ok(t) and t.monitor ~= nil',
+        '        and t.monitor.id == s.monitor.id then',
+        '      local d = sign * ((t.at[along] + t.size[along] / 2)',
+        '        - (s.at[along] + s.size[along] / 2))',
+        '      local lo = math.max(s.at[across], t.at[across])',
+        '      local hi = math.min(s.at[across] + s.size[across],',
+        '        t.at[across] + t.size[across])',
+        '      if d > 0 and hi > lo then',
+        '        local p = math.abs((t.at[across] + t.size[across] / 2)',
+        '          - (s.at[across] + s.size[across] / 2))',
+        '        if best == nil or d < bd or (d == bd and (p < bp',
+        '            or (p == bp and t.address < best.address))) then',
+        '          best, bd, bp = t, d, p',
+        '        end',
+        '      end',
+        '    end',
+        '  end',
+        '  if best == nil then return "noop" end',
+        // Hyprland's swap warps the cursor; restore it to avoid hover-select.
+        '  local cursor = hl.get_cursor_pos()',
+        '  hl.dispatch(hl.dsp.window.swap({ window = ' + selector + ',',
+        '    target = "address:" .. best.address }))',
+        '  if cursor ~= nil then',
+        '    hl.dispatch(hl.dsp.cursor.move({ x = cursor.x, y = cursor.y }))',
+        '  end',
+        '  return "swap"',
+        'end'
+    ].join('\n')
+}
+
+// Map a key event to one action. "none" is unhandled; every other action is
+// consumed so unsupported modifier chords cannot fall through to navigation.
+function routeKey(event, ctx) {
+    var key = Number(event.key)
+    // Keypad keys carry KeypadModifier, and cycle mode keeps Super held.
+    // Neither distinguishes a Stage chord, so mask both before exact matches.
+    var mods = Number(event.modifiers || 0) & ~(MOD.keypad | MOD.meta)
+    var panes = !!ctx.panes
+
+    // Only an armed cycle modifier release commits.
+    if (event.type === "release") {
+        if (event.isAutoRepeat || !ctx.armed || ctx.dragPending)
+            return decision("none")
+        return MODIFIER_KEYS.indexOf(key) >= 0
+            ? decision("commit") : decision("none")
+    }
+
+    // A drag owns the keyboard; its first Escape cancels only the gesture.
+    if (key === KEY.escape) {
+        if (event.isAutoRepeat) return decision("consume")
+        return decision(ctx.dragPending ? "dragCancel" : "dismiss")
+    }
+    if (ctx.dragPending) return decision("consume")
+
+    // Swallow repeated X presses so a close cannot cascade to the next pane.
+    if (key === KEY.x)
+        return decision(panes && mods === MOD.none && !event.isAutoRepeat
+                        ? "close" : "consume")
+
+    var direction = arrowDirection(key)
+    if (direction && mods === MOD.shift)
+        return panes ? decision("swap", direction) : decision("consume")
+    if (direction && mods === (MOD.control | MOD.shift))
+        return panes && DIRECTIONS[direction].axis === "x"
+            ? decision("move", direction) : decision("consume")
+
+    // Shift+Tab may arrive as Backtab or as a shifted Tab.
+    if ((key === KEY.backtab && (mods === MOD.none || mods === MOD.shift))
+        || (key === KEY.tab && mods === MOD.shift))
+        return decision("advance", -1)
+    if (mods !== MOD.none) return decision("consume")
+
+    if (key === KEY.up) return decision("zoomOut")
+    if (key === KEY.down) return decision("zoomIn")
+    if (key === KEY.left) return decision("advance", -1)
+    if (key === KEY.right || key === KEY.tab) return decision("advance", 1)
+    if (key === KEY.ret || key === KEY.enter) return decision("activate")
+    if (key > KEY.zero && key <= KEY.nine) return decision("workspace", key - KEY.zero)
+    return decision("none")
+}
+
+function decision(action, arg) {
+    return { action: action, arg: arg === undefined ? null : arg }
+}
