@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+- Added graceful close controls to window thumbnails and title pills, plus
+  `X` to close the selected pane without leaving Stage.
+- Added thumbnail drag and drop between workspaces, including the `+` slot,
+  with compositor-side validation and stable click behavior.
+- Added `Shift` + arrow pane swaps and `Ctrl-Shift` + `←`/`→` workspace moves.
+  Selection follows the edited window and swaps preserve the pointer position.
+- Reworked workspace and pane reconciliation around stable identities, reducing
+  preview churn and keeping geometry current after compositor changes.
+- Consolidated input and compositor logic into an importable module with
+  executed Lua scenarios and broader CI coverage.
+
 ## 0.2.1
 
 - Security: window titles, app ids, and MPRIS track labels now render with
