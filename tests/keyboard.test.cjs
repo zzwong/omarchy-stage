@@ -1,16 +1,10 @@
-// Keyboard editing: what a key event means (routeKey), where a move sends the
-// pane (moveDestinationIndex), and what the compositor is asked to do about a
-// swap (swapLua). All three come from StageLogic.js verbatim; the generated
-// Lua is then executed by tests/chunk.lua against a mocked Hyprland API, so
-// the exact string Stage dispatches is what gets tested.
+// Key routing and the exact Lua chunks Stage dispatches.
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { StageLogic: L } = require('./load.cjs');
 
-// --- the Qt values the module repeats ------------------------------------
-// routeKey compares against its own copies so node needs no QML engine; they
-// are Qt's public enum values and these are them.
+// Qt values repeated by StageLogic.js.
 assert.equal(L.KEY.escape, 0x01000000);
 assert.equal(L.KEY.tab, 0x01000001);
 assert.equal(L.KEY.backtab, 0x01000002);
@@ -42,8 +36,7 @@ function route(key, modifiers, ctx, extra) {
                                     isAutoRepeat: false }, extra || {}),
                     ctx || LIST);
 }
-// The decision comes out of the vm context, so its fields are compared
-// rather than the object.
+// Compare fields because the decision comes from a vm context.
 function is(decision, action, arg) {
   assert.equal(decision.action, action);
   assert.equal(decision.arg, arg === undefined ? null : arg);
@@ -76,10 +69,7 @@ is(route(K.ret, M.keypad), 'activate');
 is(route(K.down, M.keypad, PANE), 'zoomIn');
 is(route(0x33 /* Key_3 */, M.keypad), 'workspace', 3);
 
-// In cycle mode Super is held down for the overlay's whole life, so every key
-// arrives carrying MetaModifier. Stage has no Super chord of its own, so the
-// flag is never a discriminator -- and without masking it, cycle mode
-// swallows every plain navigation key.
+// Cycle mode holds Super, which Stage masks because it defines no Super chord.
 is(route(K.right, M.meta), 'advance', 1);
 is(route(K.left, M.meta), 'advance', -1);
 is(route(K.up, M.meta), 'zoomOut');
@@ -137,9 +127,7 @@ for (const [key, mods] of [[K.right, 0], [K.up, 0], [K.ret, 0], [K.tab, 0],
                            [0x31, 0], [K.right, M.shift]])
   is(route(key, mods, DRAG), 'consume');
 
-// Releases. Only the modifier hold-to-cycle is waiting on commits, and only
-// where a step armed it: an overlay that was never stepped goes on meaning
-// hide, and a gesture in progress owns the keyboard.
+// Only an armed hold-to-cycle modifier release commits.
 const ARMED = { panes: false, armed: true };
 const release = (key, ctx, extra) =>
   L.routeKey(Object.assign({ type: 'release', key: key, modifiers: 0,
@@ -155,8 +143,7 @@ for (const key of [K.escape, K.right, K.ret, K.x, K.tab, 0x31])
   is(release(key, ARMED), 'none', null);
 
 // --- moveDestinationIndex -------------------------------------------------
-// A move walks the row Stage is showing -- 1, 3, 7 -- never the next
-// workspace number, never wrapping, and never off either end.
+// Moves follow the displayed row without wrapping.
 const SHOWN = [1, 3, 7];
 assert.equal(L.moveDestinationIndex(SHOWN, 1, false), 1);
 assert.equal(L.moveDestinationIndex(SHOWN, 3, false), 2);
@@ -203,9 +190,8 @@ for (const bad of [0, -1, 1.5, '3; hl.dsp.exit({', NaN, null, '3px', {}])
 }
 
 // --- the chunks, executed -------------------------------------------------
-// Every scenario runs the generated Lua against tests/chunk.lua's mocked
-// `hl`. In the `tiled` world 0xa is top-left, 0xb top-right, 0xc bottom-left
-// and 0xd bottom-right of workspace 1, with 0xe alone on 3 and 0xf alone on 7.
+// Execute generated Lua against the mocked compositor. In `tiled`, 0xa/0xb
+// are the top row, 0xc/0xd the bottom row, and 0xe/0xf live on workspaces 3/7.
 const restored = ' cursor{x=640,y=480}';
 const swapped = (source, target) =>
   'swap swap{target=address:' + target + ',window=address:' + source + '}' + restored;

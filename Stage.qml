@@ -208,11 +208,7 @@ Item {
   // last chose several workspaces ago -- or, after a close handed the
   // selection on, on a window they never chose at all.
   //
-  // `keepPane` is the one exception, and it is an address rather than a flag:
-  // Stage sending a window to another workspace takes the pane zoom with it,
-  // because the user is still looking at the same window. The address is
-  // re-scoped after the index is assigned, so the zoom belongs to the
-  // workspace the window is on its way to.
+  // A keyboard move can carry pane mode to the destination by address.
   function selectWorkspace(index, keepPane) {
     if (index !== root.selectedIndex) root.selectPane(-1)
     root.selectedIndex = index
@@ -307,9 +303,7 @@ Item {
     values: root.workspaceList
   }
 
-  // The workspace ids Stage is showing, in the order it shows them: the
-  // focused monitor's, which is not the compositor's whole list. What the
-  // "+" slot's id is computed from, and the row a keyboard move walks.
+  // The focused monitor's workspace ids, in display order.
   readonly property var shownIds:
     workspaceList.map(function(w) { return w.id })
 
@@ -827,35 +821,20 @@ Item {
   }
 
   // --- Keyboard editing ------------------------------------------------
-  // Shift+arrow swaps the selected pane with a tiled neighbour; Ctrl+Shift+
-  // ←/→ sends it to the workspace next to this one in the row Stage is
-  // showing. Each is one dispatched Lua chunk — the swap's own, and the same
-  // move chunk a dragged thumbnail uses — so no decision is made against
-  // geometry that has already changed, and nothing has to wait for a reply:
-  // Hyprland answers requests on one socket in order, and dispatch() restarts
-  // the geometry refresh behind each one. A swap inside one workspace emits
-  // no Hyprland event at all (verified against 0.56.2), which is exactly why
-  // that refresh is there.
 
   function swapPane(direction) {
     root.dispatch(StageLogic.swapLua(root.paneAddress, direction,
                                      root.paneWorkspaceId))
   }
 
-  // Stage knows where it is sending the window, so it takes the selection
-  // there itself rather than waiting to notice the window arrive. Quickshell
-  // removes a moved toplevel from its old workspace before adding it to the
-  // new one, and a workspace the move empties is destroyed in the same burst:
-  // a selection that has to be inferred from that is a selection that lands
-  // on a sibling. This one is decided before the request goes out.
+  // Follow immediately: Quickshell briefly removes the toplevel from every
+  // workspace during a move, so following it reactively can select a sibling.
   function movePane(direction) {
     var to = StageLogic.moveDestinationIndex(
       root.shownIds, root.selectedWorkspaceId, direction === "left")
-    if (to < 0) return // the end of the row; nothing is created
+    if (to < 0) return
     var address = root.paneAddress
-    // The chunk refuses a grouped window in the compositor. Refusing it here
-    // too is what keeps the selection from travelling to a workspace the
-    // window is never going to arrive on.
+    // Keep the UI in place when the compositor will refuse a grouped window.
     var pane = root.selectedPanes[root.paneIndex]
     if (!pane || StageLogic.isGrouped(pane.lastIpcObject)) return
     var lua = StageLogic.moveLua(address, root.workspaceList[to].id)
@@ -865,7 +844,7 @@ Item {
   }
 
   function editPane(action, direction) {
-    root.disarmCycle() // an edit is not a step; releasing Super must not commit
+    root.disarmCycle()
     root.kbdPriority = true
     if (!root.paneAddress) return
     if (action === "move") root.movePane(direction)
@@ -1261,16 +1240,10 @@ Item {
         keyCatcher.handleKey(event, "press")
       }
 
-      // Only the modifier's release is ever delivered: its press precedes the
-      // grab. Which release means "commit the step" is routeKey's call like
-      // every other key's, so nothing here compares a key of its own.
+      // The opening modifier's press precedes the keyboard grab.
       Keys.onReleased: function(event) { keyCatcher.handleKey(event, "release") }
 
-      // What a key event means is a decision with no compositor in it:
-      // StageLogic.routeKey makes it — exact modifiers, the keypad and Super
-      // flags masked off, edits only in pane mode, nothing unrecognised
-      // falling through to navigation — and this carries it out. Anything but
-      // "none" is an accepted event.
+      // Keep key interpretation testable and independent from QML state changes.
       function handleKey(event, type) {
         var grid = root.uiStyle === "picker" && root.viewMode === "grid"
         var caro = root.uiStyle === "picker" && root.viewMode === "carousel"
@@ -1285,16 +1258,16 @@ Item {
         event.accepted = true
 
         switch (command.action) {
-        case "consume": // a chord Stage does not implement, swallowed
+        case "consume":
           break
-        case "commit": // the modifier released after a cycle step
+        case "commit":
           root.disarmCycle()
           root.activateCurrent()
           break
         case "dismiss":
           root.dismiss()
           break
-        case "dragCancel": // Escape while a thumbnail is held: the gesture, not the overlay
+        case "dragCancel":
           root.endDrag("escape")
           break
         case "close":
