@@ -6,7 +6,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const root = path.join(__dirname, '..');
+const logicPath = path.join(root, 'StageLogic.js');
 const context = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(root, 'StageLogic.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(logicPath, 'utf8'), context, { filename: logicPath });
 
 module.exports = { StageLogic: context, root };
