@@ -657,7 +657,11 @@ Item {
   }
 
   function createWorkspace() {
-    root.focusWorkspace(root.nextWorkspaceId())
+    var lua = StageLogic.createWorkspaceLua(root.nextWorkspaceId(),
+                                           root.monitor ? root.monitor.id : -1)
+    if (!lua) return
+    root.dismiss()
+    root.dispatch(lua)
   }
 
   function focusWindow(address) {
