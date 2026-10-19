@@ -36,6 +36,25 @@ function focusWorkspaceLua(id) {
     return n ? 'hl.dsp.focus({ workspace = ' + n + ' })' : ""
 }
 
+// The "+" slot names a new workspace, not an existing workspace on another
+// monitor. Its number comes from the shown row, so it can already be in use
+// elsewhere. Check both the target and the focused monitor in the compositor,
+// in the same request that creates it; a colliding ID must not switch monitors.
+function createWorkspaceLua(id, monitorId) {
+    var n = workspaceId(id)
+    if (!n || typeof monitorId !== "number" || !Number.isFinite(monitorId)
+        || Math.floor(monitorId) !== monitorId || monitorId < 0) return ""
+    return [
+        'function()',
+        '  local monitor = hl.get_active_monitor()',
+        '  if monitor == nil or monitor.id ~= ' + monitorId + ' then return "noop" end',
+        '  if hl.get_workspace(' + n + ') ~= nil then return "noop" end',
+        '  hl.dispatch(hl.dsp.focus({ workspace = ' + n + ' }))',
+        '  return "create"',
+        'end'
+    ].join('\n')
+}
+
 // --- Close requests --------------------------------------------------------
 
 // A close is worth sending when the window is still live and no request for
