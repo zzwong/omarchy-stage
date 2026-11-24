@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Fixed the `+` workspace action so it no longer jumps to an existing workspace
+  if another monitor claims the same workspace ID before activation.
+
 ## 0.3.0
 
 - Added graceful close controls to window thumbnails and title pills, plus
